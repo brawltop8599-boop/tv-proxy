@@ -1,13 +1,6 @@
-from fastapi import FastAPI, Response, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
-import requests
-import threading
-import time
-import json
-import os
-
 PORTAL_URL = "http://iptv.ria-link.tv/stalker_portal/server/load.php"
 MAC_BASE = "00:1A:79:01:60:21"
+BASE_PROXY_URL = "https://tv-fby3.onrender.com"
 
 app = FastAPI()
 
@@ -93,8 +86,9 @@ def update_playlist():
     
     session = get_session()
     
+    # 1. Аввал категорияларни олиб кўрамиз (агар мавжуд бўлса)
     categories_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
-    genre_ids = ["*"]
+    genre_ids = ["*"] # '*' - барча жанрлар/каналлар дегани
     try:
         cat_resp = session.get(categories_url, timeout=10)
         cats = cat_resp.json().get("js", {})
@@ -105,10 +99,12 @@ def update_playlist():
                     genre_ids.append(gid)
     except Exception as e:
         print(f"Категорияларни олишда эслатма: {e}")
-        
+
     channels = []
     seen_cmds = set()
-    
+
+    # 2. Ҳар бир категория бўйича ёки умумий сўров орқали каналларни йиғамиз
+    # Баъзи порталлар жанр бўйича сўрашни талаб қилади (* ёки рақамлар)
     for g_id in genre_ids:
         channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml"
         try:
@@ -116,6 +112,7 @@ def update_playlist():
             res_json = channels_resp.json()
             data = res_json.get("js", {}).get("data", [])
             
+            # Агар data рўйхат бўлса, уларни қўшамиз
             if isinstance(data, list):
                 for ch in data:
                     cmd = ch.get("cmd", "")
@@ -124,7 +121,8 @@ def update_playlist():
                         channels.append(ch)
         except Exception as e:
             continue
-            
+
+    # Агар юқоридаги усул билан чиқмаса, оддий get_all_channels ни ўзини ишлатамиз
     if not channels:
         try:
             channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
@@ -132,8 +130,9 @@ def update_playlist():
             channels = channels_resp.json().get("js", {}).get("data", [])
         except Exception as e:
             print(f"Умумий каналларни олишда хатолик: {e}")
-            
+
     print(f"Жами топилган уникал каналлар сони: {len(channels)}")
+
     channels_list = []
     for target_channel in channels:
         ch_name = target_channel.get("name", "Kanal")
@@ -143,7 +142,7 @@ def update_playlist():
                 "name": ch_name,
                 "cmd": cmd
             })
-            
+
     temp_file = "playlist.tmp"
     final_file = "playlist.json"
     
@@ -158,7 +157,6 @@ def update_playlist():
     status_data["total_channels"] = len(channels_list)
     status_data["status"] = "Muvaffaqiyatli ishlayapti ✅" if len(channels_list) > 0 else "Kanal topilmadi ⚠️"
     print("--- UPDATE_PLAYLIST TUGADI ---")
-
 def background_worker():
     while True:
         try:
@@ -173,8 +171,7 @@ def startup_event():
     t.start()
 
 @app.get("/", response_class=HTMLResponse)
-def admin_panel(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+def admin_panel():
     return f"""
     <!DOCTYPE html>
     <html lang="uz">
@@ -196,8 +193,8 @@ def admin_panel(request: Request):
             <p><b>Kanallar soni:</b> {status_data["total_channels"]} ta</p>
             <p><b>Oxirgi yangilangan vaqt:</b> {status_data["last_update"]}</p>
             <hr style="border: 0.5px solid #334155; margin: 20px 0;">
-            <a href="{base_url}/pl.m3u8" target="_blank">📥 M3U Playlist (/pl.m3u8)</a>
-            <a href="{base_url}/playlist.json" target="_blank" style="color: #94a3b8; font-size: 14px;">📄 JSON ni ko'rish (/playlist.json)</a>
+            <a href="/pl.m3u8" target="_blank">📥 M3U Playlist (/pl.m3u8)</a>
+            <a href="/playlist.json" target="_blank" style="color: #94a3b8; font-size: 14px;">📄 JSON ni ko'rish (/playlist.json)</a>
         </div>
     </body>
     </html>
@@ -208,8 +205,7 @@ def health_check():
     return {"status": "ok"}
 
 @app.get("/playlist.json")
-def download_json(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+def download_json():
     if os.path.exists("playlist.json"):
         with open("playlist.json", "r", encoding="utf-8") as f:
             channels = json.load(f)
@@ -217,14 +213,13 @@ def download_json(request: Request):
         for index, ch in enumerate(channels):
             result.append({
                 "name": ch["name"],
-                "url": f"{base_url}/stream/{index}"
+                "url": f"{BASE_PROXY_URL}/stream/{index}"
             })
         return result
     return {"error": "Hali playlist tayyor emas!"}, 404
 
 @app.get("/pl.m3u8", response_class=PlainTextResponse)
-def download_m3u8(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+def download_m3u8():
     if not os.path.exists("playlist.json"):
         return "#EXTM3U\n# Xatolik: Playlist hali tayyorlanmadi"
     try:
@@ -236,7 +231,7 @@ def download_m3u8(request: Request):
     m3u_lines = ["#EXTM3U"]
     for index, ch in enumerate(channels):
         name = ch.get("name", "Kanal")
-        stream_link = f"{base_url}/stream/{index}"
+        stream_link = f"{BASE_PROXY_URL}/stream/{index}"
         m3u_lines.append(f"#EXTINF:-1,{name}")
         m3u_lines.append(stream_link)
     return "\n".join(m3u_lines)
@@ -246,7 +241,7 @@ def proxy_stream(index: int):
     print(f"--- STREAM SO'ROVI KELDI: индекс {index} ---")
     if not os.path.exists("playlist.json"):
         return Response("Playlist topilmadi", status_code=404)
-        
+    
     try:
         with open("playlist.json", "r", encoding="utf-8") as f:
             channels = json.load(f)
@@ -254,7 +249,7 @@ def proxy_stream(index: int):
         cmd = target["cmd"]
     except Exception as e:
         return Response(f"Kanal topilmadi: {e}", status_code=404)
-        
+
     session = get_session()
     stream_url = ""
     
@@ -275,21 +270,22 @@ def proxy_stream(index: int):
                     stream_url = stream_url[len(prefix):].strip()
     except Exception as e:
         print(f"Create link xatolik (stream): {e}")
-        
+
     if not stream_url and "http" in cmd:
         stream_url = cmd
         for prefix in ["ffmpeg ", "ch:ffrt ", "ffrt ", "ch:"]:
             if stream_url.startswith(prefix):
                 stream_url = stream_url[len(prefix):].strip()
-                
+
     if stream_url and "token=" not in stream_url:
         session_token = session.cookies.get("token")
         if session_token:
             separator = "&" if "?" in stream_url else "?"
             stream_url = f"{stream_url}{separator}token={session_token}"
-            
+
     print(f"Йўналтирилаётган янги тоза ссылка: {stream_url}")
     
     if not stream_url:
         return Response("Stream URL яратиб бўлмади", status_code=500)
+
     return RedirectResponse(url=stream_url, status_code=302)
