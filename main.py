@@ -51,7 +51,10 @@ async def get_valid_session():
     headers = get_base_headers()
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         try:
+            # Эмулируем последовательность загрузки STB
             await client.get(BASE_PORTAL_ROOT, headers=headers)
+            await client.get(f"{BASE_PORTAL_ROOT}c/xpcom.common.js", headers=headers)
+            await client.get(f"{BASE_PORTAL_ROOT}c/version.js", headers=headers)
             
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url, headers=headers)
@@ -195,7 +198,6 @@ async def get_stream(idx: int, key: str):
             if fallback.startswith("http://") or fallback.startswith("https://"):
                 stream_url = fallback
                 
-    9  # placeholder
     if not stream_url:
         return RedirectResponse(url=STUB_VIDEO_URL, status_code=302)
         
