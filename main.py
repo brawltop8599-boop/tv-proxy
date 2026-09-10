@@ -13,12 +13,12 @@ BASE_PORTAL_ROOT = "http://portal.sky2000.ru/stalker_portal/"
 
 MAC = "00:1A:79:4D:A5:73"
 SN = "B4B46F9171F91"
-UID = "E083654D924637D114AD665CAB20140D47EF48848AC71AF7CD82BC05E65E3396"
-RANDOM = "a14652139f8947b0e4ed4d2046942614374a4c62"
-DEVICE_ID = "A8E9507D432CA3C03C6FC104100D492B5D4C2C924BA7188786264603020B2C402"
-SIGNATURE = "74032610A2B995182694D22397AE085A99412E8784545E4EDE7613A0C7136D08"
+UID = "E083654D924637D114AD665CAB20140D47EF4B848AC71AF7CD82BC05E65E3396"
+RANDOM = "738467760e694b5ed83acca3686045239a04f94a"
+DEVICE_ID = "A8E9507D432CA3C03C6FC10410D492B5D4C2C924BA71B8786264603020B2C402"
+SIGNATURE = "74032610A2B99519B2694D22397AE085A99412E8784545E4EDE7613A0C7136D0"
 HW_VERSION_2 = "474e96e1873920cd1e6066ba5c6725fbe0f0f0a8"
-PREHASH = "10980435162b4213af497d4568c3795deb340f5"
+PREHASH = "10980435162b4213af497d4568c37959deb340f5"
 
 TELEGRAM_GROUP = "https://t.me/+2lWVU6CKQsVkMWRi"
 STREAM_KEY = "TvZaTak"
@@ -92,7 +92,8 @@ async def get_valid_session_and_channels():
 
             genres_map = {}
             try:
-                genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
+                genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml{token_param}"
+                genres_res = await client.get(genres_url)
                 g_text = genres_res.text.strip()
                 if g_text.startswith("{") or g_text.startswith("["):
                     g_data = genres_res.json().get("js", [])
@@ -112,7 +113,8 @@ async def get_valid_session_and_channels():
             seen_cmds = set()
 
             try:
-                ch_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
+                ch_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml{token_param}"
+                ch_res = await client.get(ch_url)
                 ch_text = ch_res.text.strip()
                 if ch_text.startswith("{") or ch_text.startswith("["):
                     ch_json = ch_res.json()
@@ -127,7 +129,7 @@ async def get_valid_session_and_channels():
 
             if not channels:
                 try:
-                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     res = await client.get(list_url)
                     res_text = res.text.strip()
                     if res_text.startswith("{") or res_text.startswith("["):
@@ -144,7 +146,7 @@ async def get_valid_session_and_channels():
 
             if not channels and genres_map:
                 for gid in genres_map.keys():
-                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     try:
                         sub_resp = await client.get(sub_url)
                         sub_text = sub_resp.text.strip()
@@ -238,7 +240,8 @@ async def get_stream(idx: int, key: str):
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
-            link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml"
+            token_param = f"&token={token}" if token else ""
+            link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml{token_param}"
             link_res = await client.get(link_url)
             link_text = link_res.text.strip()
             
