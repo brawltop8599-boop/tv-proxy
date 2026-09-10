@@ -306,6 +306,12 @@ def proxy_stream(index: int):
         return Response("Stream URL яратиб бўлмади", status_code=500)
 
     return RedirectResponse(url=stream_url, status_code=302)
-
+@app.get("/update")
+def manual_update():
+    try:
+        update_playlist()
+        return {"status": "success", "total_channels": status_data["total_channels"]}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=10000)
