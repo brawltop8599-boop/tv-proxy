@@ -89,42 +89,89 @@ def update_playlist():
     status_data["status"] = "Yangilanmoqda..."
     
     session = get_session()
-    channels = []
+    token = session.cookies.get("token", "")
+    token_param = f"&token={token}" if token else ""
     
-    # Способ 1: Пытаемся получить через категории (жанры)
-    try:
-        genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
-        genres_resp = session.get(genres_url, timeout=15)
-        genres_data = genres_resp.json().get("js", [])
-        
-        genre_ids = ["*"]
-        if isinstance(genres_data, list):
-            for g in genres_data:
-                gid = g.get("id")
-                if gid:
-                    genre_ids.append(gid)
-        
-        seen_cmds = set()
-        for g_id in genre_ids:
-            channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml"
-            ch_resp = session.get(channels_url, timeout=15)
-            res_json = ch_resp.json()
-            js_content = res_json.get("js", [])
-            
-            items = []
-            if isinstance(js_content, dict):
-                items = js_content.get("data", [])
-            elif isinstance(js_content, list):
-                items = js_content
-                
-            for ch in items:
-                cmd = ch.get("cmd", "")
-                if cmd and cmd not in seen_cmds:
-                    seen_cmds.add(cmd)
-                    channels.append(ch)
-    except Exception as e:
-        print(f"Категориялар орқали олишда хатолик: {e}")
+    channels = []
+    seen_cmds = set()
 
+    # 1. Сначала пробуем получить через жанры (это надежнее для Stalker-порталов)
+    genre_ids = ["*"]
+    try:
+        cat_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml{token_param}"
+        cat_resp = session.get(cat_url, timeout=15)
+        cats = cat_resp.json().get("js", [])
+        if isinstance(cats, list):
+            for c in cats:
+                gid = c.get("id")
+                if gid is not None:
+                    genre_ids.append(str(gid))
+    except Exception as e:
+        print(f"Жанрларни олишда огоҳлантириш: {e}")
+
+    # 2. Собираем каналы по каждому жанру с таймаутом
+    for g_id in genre_ids:
+        channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml{token_param}"
+        try:
+            channels_resp = session.get(channels_url, timeout=20)
+            res_json = channels_resp.json()
+            data = res_json.get("js", [])
+            
+            if isinstance(data, dict):
+                data = data.get("data", [])
+                
+            if isinstance(data, list):
+                for ch in data:
+                    cmd = ch.get("cmd", "")
+                    if cmd and cmd not in seen_cmds:
+                        seen_cmds.add(cmd)
+                        channels.append(ch)
+        except Exception:
+            continue
+
+    # 3. Если через жанры ничего не нашлось, пробуем get_ordered_list
+    if not channels:
+        try:
+            list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&JsHttpRequest=1-xml{token_param}"
+            list_resp = session.get(list_url, timeout=25)
+            list_json = list_resp.json()
+            data = list_json.js?.get("data", []) if isinstance(list_json.get("js"), dict) else list_json.get("js", [])
+            if isinstance(data, list):
+                for ch in data:
+                    cmd = ch.get("cmd", "")
+                    if cmd and cmd not in seen_cmds:
+                        seen_cmds.add(cmd)
+                        channels.append(ch)
+        except Exception as e:
+            print(f"Ordered list хатолик: {e}")
+
+    print(f"Жами топилган каналлар сони: {len(channels)}")
+
+    channels_list = []
+    for target_channel in channels:
+        ch_name = target_channel.get("name", target_channel.get("title", "Kanal"))
+        cmd = target_channel.get("cmd", "")
+        if cmd:
+            channels_list.append({
+                "name": ch_name,
+                "cmd": cmd
+            })
+
+    temp_file = "playlist.tmp"
+    final_file = "playlist.json"
+    
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(channels_list, f, ensure_ascii=False, indent=4)
+        
+    if os.path.exists(final_file):
+        os.remove(final_file)
+    os.rename(temp_file, final_file)
+    
+    status_data["last_update"] = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    status_data["total_channels"] = len(channels_list)
+    status_data["status"] = "Muvaffaqiyatli ishlayapti ✅" if len(channels_list) > 0 else "Kanal topilmadi ⚠️"
+    print("--- UPDATE_PLAYLIST TUGADI ---")
+    
     # Способ 2: Если через жанры ничего не нашлось, запрашиваем общим списком без жанров
     if not channels:
         try:
