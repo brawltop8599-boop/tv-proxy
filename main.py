@@ -57,7 +57,6 @@ async def get_valid_session_and_channels():
 
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url)
-            print("HANDSHAKE JAVOBI:", hs_res.text[:300]) # Проверяем, дает ли токен
             hs_data = hs_res.json()
             js_resp = hs_data.get("js", {})
             token = js_resp.get("token", "")
@@ -68,10 +67,11 @@ async def get_valid_session_and_channels():
                 headers["Authorization"] = f"Bearer {token}"
                 client.headers.update(headers)
 
+            token_param = f"&token={token}" if token else ""
+
             metrics_data = json.dumps({
                 "type": "stb", "model": "MAG254", "mac": MAC, "sn": SN, "uid": UID, "random": rand_val
             })
-            token_param = f"&token={token}" if token else ""
             prof_url = (
                 f"{PORTAL_URL}?type=stb&action=get_profile&JsHttpRequest=1-xml&hd=1"
                 f"{token_param}"
@@ -83,12 +83,12 @@ async def get_valid_session_and_channels():
                 f"&hw_version_2={HW_VERSION_2}&timestamp={int(now)}&api_signature=262&prehash={PREHASH}"
             )
             await client.get(prof_url)
-            await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml")
+            await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml{token_param}")
 
             genres_map = {}
             try:
-                genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
-                print("GENRES TEXT:", genres_res.text[:300]) # Что отвечает портал для жанров?
+                genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml{token_param}"
+                genres_res = await client.get(genres_url)
                 g_data = genres_res.json().get("js", [])
                 if isinstance(g_data, dict):
                     g_data = g_data.get("data", [])
@@ -104,8 +104,8 @@ async def get_valid_session_and_channels():
             seen_cmds = set()
 
             try:
-                ch_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
-                print("CHANNELS TEXT:", ch_res.text[:300]) # Что отвечает портал для каналов?
+                ch_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml{token_param}"
+                ch_res = await client.get(ch_url)
                 ch_json = ch_res.json()
                 js_data = ch_json.get("js", [])
                 data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
@@ -116,9 +116,8 @@ async def get_valid_session_and_channels():
 
             if not channels:
                 try:
-                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     res = await client.get(list_url)
-                    print("ORDERED LIST TEXT:", res.text[:300])
                     res_json = res.json()
                     data = res_json.get("js", {}).get("data", [])
                     if not data and isinstance(res_json.get("js"), list):
@@ -130,7 +129,7 @@ async def get_valid_session_and_channels():
 
             if not channels and genres_map:
                 for gid in genres_map.keys():
-                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     try:
                         sub_resp = await client.get(sub_url)
                         sub_data = sub_resp.json().get("js", {}).get("data", [])
@@ -222,7 +221,8 @@ async def get_stream(idx: int, key: str):
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
-            link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml"
+            token_param = f"&token={token}" if token else ""
+            link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml{token_param}"
             link_res = await client.get(link_url)
             link_data = link_res.json()
             
