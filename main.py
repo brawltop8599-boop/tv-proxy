@@ -53,23 +53,30 @@ async def get_valid_session_and_channels():
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
+            # 1. Заходим на корень портала
             await client.get(BASE_PORTAL_ROOT)
 
+            # 2. Делаем первичный handshake для получения токена
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url)
-            print("HANDSHAKE JAVOBI:", hs_res.text[:300])
             hs_data = hs_res.json()
             js_resp = hs_data.get("js", {})
             token = js_resp.get("token", "")
             rand_val = js_resp.get("random", RANDOM)
 
-            if token:
-                client.cookies.set("token", token, domain="portal.sky2000.ru", path="/")
-                headers["Authorization"] = f"Bearer {token}"
-                client.headers.update(headers)
+            if not token:
+                print("Ошибка: Портал не вернул токен при handshake!")
+                return "", []
 
-            token_param = f"&token={token}" if token else ""
+            # Записываем полученный токен в куки и заголовки клиента
+            client.cookies.set("token", token, domain="portal.sky2000.ru", path="/")
+            cookies["token"] = token
+            headers["Authorization"] = f"Bearer {token}"
+            client.headers.update(headers)
 
+            token_param = f"&token={token}"
+
+            # 3. Обязательный запрос профиля (инициализирует сессию на сервере Stalker)
             metrics_data = json.dumps({
                 "type": "stb", "model": "MAG254", "mac": MAC, "sn": SN, "uid": UID, "random": rand_val
             })
@@ -83,9 +90,13 @@ async def get_valid_session_and_channels():
                 f"&metrics={urllib.parse.quote(metrics_data)}"
                 f"&hw_version_2={HW_VERSION_2}&timestamp={int(now)}&api_signature=262&prehash={PREHASH}"
             )
-            await client.get(prof_url)
+            prof_res = await client.get(prof_url)
+            print("PROFILE STATUS:", prof_res.status_code)
+
+            # 4. Запрос системной информации
             await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml{token_param}")
 
+            # 5. Загружаем жанры
             genres_map = {}
             try:
                 genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml{token_param}"
@@ -102,6 +113,7 @@ async def get_valid_session_and_channels():
             except Exception as e:
                 print(f"Genres error details: {e}")
 
+            # 6. Загружаем каналы
             channels = []
             seen_cmds = set()
 
