@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Response, HTTPException
+from fastapi import FastAPI, Response, HTTPException, Request
 from fastapi.responses import RedirectResponse
 import httpx
 import time
@@ -127,11 +127,11 @@ async def root():
     return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
 @app.get("/pl.m3u8")
-async def get_m3u8(request: httpx.URL | None = None, req: Response = None): # type: ignore
+async def get_m3u8(request: Request):
     if not cached_channels:
         await update_channels_list()
     
-    base_url = str(request.base_url).rstrip("/") if request else "" # type: ignore
+    base_url = str(request.base_url).rstrip("/")
     
     m3u = ["#EXTM3U"]
     for idx, ch in enumerate(cached_channels):
