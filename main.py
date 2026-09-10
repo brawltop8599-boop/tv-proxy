@@ -96,11 +96,12 @@ def update_playlist():
     status_data["status"] = "Yangilanmoqda..."
     
     session = get_session()
+    time.sleep(2) # Сессия барқарорлашиши учун қисқа пауза
     
     categories_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
     genre_ids = ["*"] 
     try:
-        cat_resp = session.get(categories_url, timeout=10)
+        cat_resp = session.get(categories_url, timeout=15)
         cats = cat_resp.json().get("js", {})
         if isinstance(cats, list):
             for c in cats:
@@ -116,9 +117,12 @@ def update_playlist():
     for g_id in genre_ids:
         channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml"
         try:
-            channels_resp = session.get(channels_url, timeout=10)
+            channels_resp = session.get(channels_url, timeout=15)
             res_json = channels_resp.json()
-            data = res_json.get("js", {}).get("data", [])
+            data = res_json.get("js", {})
+            
+            if isinstance(data, dict):
+                data = data.get("data", [])
             
             if isinstance(data, list):
                 for ch in data:
@@ -126,14 +130,21 @@ def update_playlist():
                     if cmd and cmd not in seen_cmds:
                         seen_cmds.add(cmd)
                         channels.append(ch)
-        except Exception as e:
+        except Exception:
             continue
+        time.sleep(0.5) # Ҳар бир жанр сўрови орасида кичик пауза
 
+    # Агар юқоридаги усул билан чиқмаса, мажбурий равишда умумий рўйхатни сўраб кўрамиз
     if not channels:
         try:
             channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
-            channels_resp = session.get(channels_url, timeout=10)
-            channels = channels_resp.json().get("js", {}).get("data", [])
+            channels_resp = session.get(channels_url, timeout=20)
+            res_json = channels_resp.json()
+            data = res_json.get("js", {})
+            if isinstance(data, dict):
+                channels = data.get("data", [])
+            elif isinstance(data, list):
+                channels = data
         except Exception as e:
             print(f"Умумий каналларни олишда хатолик: {e}")
 
@@ -141,7 +152,7 @@ def update_playlist():
 
     channels_list = []
     for target_channel in channels:
-        ch_name = target_channel.get("name", "Kanal")
+        ch_name = target_channel.get("name", target_channel.get("title", "Kanal"))
         cmd = target_channel.get("cmd", "")
         if cmd:
             channels_list.append({
@@ -163,7 +174,6 @@ def update_playlist():
     status_data["total_channels"] = len(channels_list)
     status_data["status"] = "Muvaffaqiyatli ishlayapti ✅" if len(channels_list) > 0 else "Kanal topilmadi ⚠️"
     print("--- UPDATE_PLAYLIST TUGADI ---")
-
 def background_worker():
     while True:
         try:
