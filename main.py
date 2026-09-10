@@ -57,6 +57,7 @@ async def get_valid_session_and_channels():
 
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url)
+            print("HANDSHAKE JAVOBI:", hs_res.text[:300])
             hs_data = hs_res.json()
             js_resp = hs_data.get("js", {})
             token = js_resp.get("token", "")
@@ -89,6 +90,7 @@ async def get_valid_session_and_channels():
             try:
                 genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml{token_param}"
                 genres_res = await client.get(genres_url)
+                print("DEBUG GENRES TEXT:", genres_res.text[:300])
                 g_data = genres_res.json().get("js", [])
                 if isinstance(g_data, dict):
                     g_data = g_data.get("data", [])
@@ -106,6 +108,7 @@ async def get_valid_session_and_channels():
             try:
                 ch_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml{token_param}"
                 ch_res = await client.get(ch_url)
+                print("DEBUG CHANNELS TEXT:", ch_res.text[:300])
                 ch_json = ch_res.json()
                 js_data = ch_json.get("js", [])
                 data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
@@ -118,6 +121,7 @@ async def get_valid_session_and_channels():
                 try:
                     list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     res = await client.get(list_url)
+                    print("DEBUG ORDERED LIST TEXT:", res.text[:300])
                     res_json = res.json()
                     data = res_json.get("js", {}).get("data", [])
                     if not data and isinstance(res_json.get("js"), list):
@@ -126,21 +130,6 @@ async def get_valid_session_and_channels():
                         channels = data
                 except Exception as e:
                     print(f"Get ordered list error details: {e}")
-
-            if not channels and genres_map:
-                for gid in genres_map.keys():
-                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
-                    try:
-                        sub_resp = await client.get(sub_url)
-                        sub_data = sub_resp.json().get("js", {}).get("data", [])
-                        if isinstance(sub_data, list):
-                            for ch in sub_data:
-                                cmd = ch.get("cmd", "")
-                                if cmd and cmd not in seen_cmds:
-                                    seen_cmds.add(cmd)
-                                    channels.append(ch)
-                    except Exception:
-                        pass
 
             formatted_channels = []
             for ch in channels:
