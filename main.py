@@ -7,14 +7,14 @@ import json
 import os
 
 PORTAL_URL = "http://iptv.ria-link.tv/stalker_portal/server/load.php"
-MAC_BASE = "00:1A:79:01:60:21"
+MAC_BASE = "00:1A:79:0D:27:10"  # Skrinshohdagi ishlayotgan MAC manzil
 BASE_PROXY_URL = "https://tv-fby3.onrender.com"
 
 app = FastAPI()
 
 status_data = {
     "last_update": "Hali yangilanmagan",
-    "total_channels": 1,
+    "total_channels": 0,
     "status": "Ishga tushmoqda...",
 }
 
@@ -40,7 +40,6 @@ def get_session():
     
     try:
         session.get("http://iptv.ria-link.tv/stalker_portal/c/", timeout=5)
-        session.get("http://iptv.ria-link.tv/stalker_portal/c/xpcom.common.js", timeout=5)
         session.get("http://iptv.ria-link.tv/stalker_portal/c/version.js", timeout=5)
     except Exception:
         pass
@@ -62,22 +61,22 @@ def get_session():
         "type": "stb",
         "model": "MAG254",
         "mac": MAC_BASE,
-        "sn": "CF7722837FFC9",
-        "uid": "0F5A9441F0ED241C4276562EDB38E07D1A6F0F38ABE4AC665D791F5644F48D53",
-        "random": "a5a2687797ac21951d97df9e09f39d056759fcc9",
+        "sn": "EC2587E8E3526",
+        "uid": "4B1F3F65BC57384B9D02562E5C907B1296D5A36A28B400DF0A6EB805CC38F430",
+        "random": "719f4589c102473af519069d92bb1c619784c03f",
     })
     token_param = f"&token={token}" if token else ""
     prof_url = (
         f"{PORTAL_URL}?type=stb&action=get_profile&JsHttpRequest=1-xml&hd=1"
         f"{token_param}"
         "&ver=ImageDescription: 0.2.18-r23-250; ImageDate: Thu Sep 13 11:31:16 EEST 2018; PORTAL version: 5.3.0; API Version: JS API version: 343; STB API version: 146; Player Engine version: 0x58c"
-        "&num_banks=2&sn=CF7722837FFC9&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi"
-        "&device_id=31E92D05FAE0DED4AECEFF04E96BB2C6EC7C4B401096485E0FA237472D515F1D"
-        "&device_id2=31E92D05FAE0DED4AECEFF04E96BB2C6EC7C4B401096485E0FA237472D515F1D"
-        "&signature=2BE043A8C3B928B6E5EFEDD96364AAD5E0BC83BC39401C28BFD01551BC910679"
+        "&num_banks=2&sn=EC2587E8E3526&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi"
+        "&device_id=CEDAE642ABBA74E97D816E9DA90BA9DEF2BD00751B16D9DE92EF2CC4E89C3401"
+        "&device_id2=CEDAE642ABBA74E97D816E9DA90BA9DEF2BD00751B16D9DE92EF2CC4E89C3401"
+        "&signature=BE897368966112541E6710E75FEFCEDB9A17B5AB34DBE27025E6ED8CF1278904"
         "&auth_second_step=1&hw_version=1.7-BD-00&not_valid_token=0"
         f"&metrics={metrics_data}"
-        f"&hw_version_2=edabb212377d71a4662e579e4f37d58adeebb007&timestamp={int(time.time())}&api_signature=262&prehash=4662ba489f757513ffff926fc0c2544274f77e28"
+        f"&hw_version_2=664706d2663465ad4cbae0db0c8cff6d48dd02c8&timestamp={int(time.time())}&api_signature=262&prehash=4dc5be07506806521482ae0f0e385a88182091a2"
     )
     try:
         session.get(prof_url, timeout=10)
@@ -93,48 +92,23 @@ def update_playlist():
     status_data["status"] = "Yangilanmoqda..."
     
     session = get_session()
-    
-    categories_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
-    genre_ids = ["*"]
-    try:
-        cat_resp = session.get(categories_url, timeout=10)
-        cats = cat_resp.json().get("js", {})
-        if isinstance(cats, list):
-            for c in cats:
-                gid = c.get("id")
-                if gid:
-                    genre_ids.append(gid)
-    except Exception as e:
-        print(f"Категорияларни олишда эслатма: {e}")
-
     channels = []
-    seen_cmds = set()
+    
+    try:
+        channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
+        channels_resp = session.get(channels_url, timeout=10)
+        res_json = channels_resp.json()
+        
+        # Stalkerdan keladigan javob tuzilmasini tekshirish
+        data = res_json.get("js", [])
+        if isinstance(data, dict):
+            channels = data.get("data", [])
+        elif isinstance(data, list):
+            channels = data
+    except Exception as e:
+        print(f"Каналларни олишда хатолик: {e}")
 
-    for g_id in genre_ids:
-        channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml"
-        try:
-            channels_resp = session.get(channels_url, timeout=10)
-            res_json = channels_resp.json()
-            data = res_json.get("js", {}).get("data", [])
-            
-            if isinstance(data, list):
-                for ch in data:
-                    cmd = ch.get("cmd", "")
-                    if cmd and cmd not in seen_cmds:
-                        seen_cmds.add(cmd)
-                        channels.append(ch)
-        except Exception as e:
-            continue
-
-    if not channels:
-        try:
-            channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
-            channels_resp = session.get(channels_url, timeout=10)
-            channels = channels_resp.json().get("js", {}).get("data", [])
-        except Exception as e:
-            print(f"Умумий каналларни олишда хатолик: {e}")
-
-    print(f"Жами топилган уникал каналлар сони: {len(channels)}")
+    print(f"Жами топилган каналлар сони: {len(channels)}")
 
     channels_list = []
     for target_channel in channels:
@@ -242,7 +216,6 @@ def download_m3u8():
 
 @app.get("/stream/{index}")
 def proxy_stream(index: int):
-    print(f"--- STREAM SO'ROVI KELDI: индекс {index} ---")
     if not os.path.exists("playlist.json"):
         return Response("Playlist topilmadi", status_code=404)
     
@@ -286,8 +259,6 @@ def proxy_stream(index: int):
         if session_token:
             separator = "&" if "?" in stream_url else "?"
             stream_url = f"{stream_url}{separator}token={session_token}"
-
-    print(f"Йўналтирилаётган янги тоза ссылка: {stream_url}")
     
     if not stream_url:
         return Response("Stream URL яратиб бўлмади", status_code=500)
