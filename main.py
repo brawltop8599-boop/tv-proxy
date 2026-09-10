@@ -55,8 +55,10 @@ async def get_valid_session():
             
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url, headers=headers)
+            print(f"Handshake status: {hs_res.status_code}, text: {hs_res.text[:200]}");
             hs_data = hs_res.json()
             token = hs_data.get("js", {}).get("token") or hs_data.get("token", "")
+            print(f"Extracted token: {token}")
 
             if token:
                 cached_token = token
@@ -70,8 +72,8 @@ async def get_valid_session():
             
             prof_url = f"{PORTAL_URL}?type=stb&action=get_profile&JsHttpRequest=1-xml&hd=1&ver=ImageDescription: 0.2.18-r23-250; ImageDate: Thu Sep 13 11:31:16 EEST 2018; PORTAL version: 5.3.0; API Version: JS API version: 343; STB API version: 146; Player Engine version: 0x58c&num_banks=2&sn={SN}&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi&device_id={DEVICE_ID}&device_id2={DEVICE_ID}&signature={SIGNATURE}&auth_second_step=1&hw_version=1.7-BD-00&not_valid_token=0&metrics={urllib.parse.quote(metrics)}&hw_version_2={HW_VERSION_2}&timestamp={timestamp}&api_signature=262&prehash={PREHASH}"
             
-            await client.get(prof_url, headers=headers)
-            await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml", headers=headers)
+            prof_res = await client.get(prof_url, headers=headers)
+            print(f"Profile status: {prof_res.status_code}")
         except Exception as e:
             print(f"Session error: {e}")
 
@@ -93,15 +95,17 @@ async def update_channels_list():
             for g in genres_data:
                 if g.get("id") and g.get("title"):
                     genres_map[g["id"]] = g["title"]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Genres error: {e}")
 
         try:
             channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
             res = await client.get(channels_url, headers=headers)
+            print(f"Channels request status: {res.status_code}")
             res_json = res.json()
             js_data = res_json.get("js", [])
             data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
+            print(f"Loaded channels count: {len(data) if isinstance(data, list) else 'Not a list'}")
             
             if data:
                 seen = set()
@@ -119,8 +123,9 @@ async def update_channels_list():
                         })
                 if new_channels:
                     cached_channels = new_channels
-        except Exception:
-            pass
+                    print(f"Successfully cached {len(cached_channels)} channels.")
+        except Exception as e:
+            print(f"Channels fetch error: {e}")
 
 @app.get("/")
 async def root():
