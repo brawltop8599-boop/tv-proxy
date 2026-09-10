@@ -22,10 +22,7 @@ def get_session():
     print("get_session: сессия yaratilmoqda...")
     session = requests.Session()
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like"
-            " Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3"
-        ),
+        "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
         "X-User-Agent": "Model: MAG250; Link: WiFi",
         "Referer": "http://iptv.ria-link.tv/stalker_portal/c/index.html",
         "Accept": "*/*",
@@ -94,19 +91,55 @@ def update_playlist():
     session = get_session()
     channels = []
     
+    # Способ 1: Пытаемся получить через категории (жанры)
     try:
-        channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
-        # Увеличен timeout до 30 секунд для борьбы с Read timed out
-        channels_resp = session.get(channels_url, timeout=30)
-        res_json = channels_resp.json()
+        genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
+        genres_resp = session.get(genres_url, timeout=15)
+        genres_data = genres_resp.json().get("js", [])
         
-        data = res_json.get("js", [])
-        if isinstance(data, dict):
-            channels = data.get("data", [])
-        elif isinstance(data, list):
-            channels = data
+        genre_ids = ["*"]
+        if isinstance(genres_data, list):
+            for g in genres_data:
+                gid = g.get("id")
+                if gid:
+                    genre_ids.append(gid)
+        
+        seen_cmds = set()
+        for g_id in genre_ids:
+            channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml"
+            ch_resp = session.get(channels_url, timeout=15)
+            res_json = ch_resp.json()
+            js_content = res_json.get("js", [])
+            
+            items = []
+            if isinstance(js_content, dict):
+                items = js_content.get("data", [])
+            elif isinstance(js_content, list):
+                items = js_content
+                
+            for ch in items:
+                cmd = ch.get("cmd", "")
+                if cmd and cmd not in seen_cmds:
+                    seen_cmds.add(cmd)
+                    channels.append(ch)
     except Exception as e:
-        print(f"Каналларни олишда хатолик: {e}")
+        print(f"Категориялар орқали олишда хатолик: {e}")
+
+    # Способ 2: Если через жанры ничего не нашлось, запрашиваем общим списком без жанров
+    if not channels:
+        try:
+            print("Умумий рўйхатдан сўраб кўрамиiz...")
+            channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
+            channels_resp = session.get(channels_url, timeout=30)
+            res_json = channels_resp.json()
+            
+            js_content = res_json.get("js", [])
+            if isinstance(js_content, dict):
+                channels = js_content.get("data", [])
+            elif isinstance(js_content, list):
+                channels = js_content
+        except Exception as e:
+            print(f"Умумий каналларни олишда хатолик: {e}")
 
     print(f"Жами топилган каналлар сони: {len(channels)}")
 
