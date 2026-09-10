@@ -57,7 +57,12 @@ async def get_valid_session_and_channels():
 
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url)
-            hs_data = hs_res.json()
+            try:
+                hs_data = hs_res.json()
+            except Exception:
+                print(f"Handshake non-JSON response: {hs_res.text[:200]}")
+                return cached_token, cached_channels
+
             js_resp = hs_data.get("js", {})
             token = js_resp.get("token", "")
             rand_val = js_resp.get("random", RANDOM)
@@ -86,15 +91,20 @@ async def get_valid_session_and_channels():
 
             genres_map = {}
             try:
-                genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
-                g_data = genres_res.json().get("js", [])
-                if isinstance(g_data, dict):
-                    g_data = g_data.get("data", [])
-                for g in g_data:
-                    gid = g.get("id")
-                    gtitle = g.get("title", "Umumiy")
-                    if gid is not None:
-                        genres_map[str(gid)] = gtitle
+                genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml{token_param}"
+                genres_res = await client.get(genres_url)
+                g_text = genres_res.text.strip()
+                if g_text.startswith("{") or g_text.startswith("["):
+                    g_data = genres_res.json().get("js", [])
+                    if isinstance(g_data, dict):
+                        g_data = g_data.get("data", [])
+                    for g in g_data:
+                        gid = g.get("id")
+                        gtitle = g.get("title", "Umumiy")
+                        if gid is not None:
+                            genres_map[str(gid)] = gtitle
+                else:
+                    print(f"Genres non-JSON response: {g_text[:150]}")
             except Exception as e:
                 print(f"Genres error: {e}")
 
@@ -102,40 +112,51 @@ async def get_valid_session_and_channels():
             seen_cmds = set()
 
             try:
-                ch_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
-                ch_json = ch_res.json()
-                js_data = ch_json.get("js", [])
-                data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
-                if isinstance(data, list):
-                    channels = data
+                ch_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml{token_param}"
+                ch_res = await client.get(ch_url)
+                ch_text = ch_res.text.strip()
+                if ch_text.startswith("{") or ch_text.startswith("["):
+                    ch_json = ch_res.json()
+                    js_data = ch_json.get("js", [])
+                    data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
+                    if isinstance(data, list):
+                        channels = data
+                else:
+                    print(f"Channels non-JSON response: {ch_text[:150]}")
             except Exception as e:
                 print(f"Get all channels error: {e}")
 
             if not channels:
                 try:
-                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     res = await client.get(list_url)
-                    res_json = res.json()
-                    data = res_json.get("js", {}).get("data", [])
-                    if not data and isinstance(res_json.get("js"), list):
-                        data = res_json.get("js", [])
-                    if isinstance(data, list):
-                        channels = data
+                    res_text = res.text.strip()
+                    if res_text.startswith("{") or res_text.startswith("["):
+                        res_json = res.json()
+                        data = res_json.get("js", {}).get("data", [])
+                        if not data and isinstance(res_json.get("js"), list):
+                            data = res_json.get("js", [])
+                        if isinstance(data, list):
+                            channels = data
+                    else:
+                        print(f"Ordered list non-JSON response: {res_text[:150]}")
                 except Exception as e:
                     print(f"Get ordered list error: {e}")
 
             if not channels and genres_map:
                 for gid in genres_map.keys():
-                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
                     try:
                         sub_resp = await client.get(sub_url)
-                        sub_data = sub_resp.json().get("js", {}).get("data", [])
-                        if isinstance(sub_data, list):
-                            for ch in sub_data:
-                                cmd = ch.get("cmd", "")
-                                if cmd and cmd not in seen_cmds:
-                                    seen_cmds.add(cmd)
-                                    channels.append(ch)
+                        sub_text = sub_resp.text.strip()
+                        if sub_text.startswith("{") or sub_text.startswith("["):
+                            sub_data = sub_resp.json().get("js", {}).get("data", [])
+                            if isinstance(sub_data, list):
+                                for ch in sub_data:
+                                    cmd = ch.get("cmd", "")
+                                    if cmd and cmd not in seen_cmds:
+                                        seen_cmds.add(cmd)
+                                        channels.append(ch)
                     except Exception:
                         pass
 
@@ -218,11 +239,17 @@ async def get_stream(idx: int, key: str):
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
-            link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml"
+            token_param = f"&token={token}" if token else ""
+            link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml{token_param}"
             link_res = await client.get(link_url)
-            link_data = link_res.json()
+            link_text = link_res.text.strip()
             
-            stream_cmd = link_data.get("js", {}).get("cmd") or link_data.get("js", {}).get("url") or link_data.get("cmd", "")
+            if link_text.startswith("{") or link_text.startswith("["):
+                link_data = link_res.json()
+                stream_cmd = link_data.get("js", {}).get("cmd") or link_data.get("js", {}).get("url") or link_data.get("cmd", "")
+            else:
+                print(f"Create link non-JSON response: {link_text[:150]}")
+                stream_cmd = ""
             
             for prefix in ["ffmpeg ", "ch:ffrt ", "ffrt ", "ch:"]:
                 if stream_cmd.startswith(prefix):
