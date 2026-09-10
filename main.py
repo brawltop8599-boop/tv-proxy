@@ -87,6 +87,7 @@ async def get_valid_session_and_channels():
             genres_map = {}
             try:
                 genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
+                print("GENRES JAVOBI:", genres_res.text[:300]) # Portal nima qaytarayotganini korish uchun
                 g_data = genres_res.json().get("js", [])
                 if isinstance(g_data, dict):
                     g_data = g_data.get("data", [])
@@ -96,25 +97,27 @@ async def get_valid_session_and_channels():
                     if gid is not None:
                         genres_map[str(gid)] = gtitle
             except Exception as e:
-                print(f"Genres error: {e}")
+                print(f"Genres error details: {e}")
 
             channels = []
             seen_cmds = set()
 
             try:
                 ch_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
+                print("CHANNELS JAVOBI:", ch_res.text[:300]) # Portal nima qaytarayotganini korish uchun
                 ch_json = ch_res.json()
                 js_data = ch_json.get("js", [])
                 data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
                 if isinstance(data, list):
                     channels = data
             except Exception as e:
-                print(f"Get all channels error: {e}")
+                print(f"Get all channels error details: {e}")
 
             if not channels:
                 try:
                     list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
                     res = await client.get(list_url)
+                    print("ORDERED LIST JAVOBI:", res.text[:300])
                     res_json = res.json()
                     data = res_json.get("js", {}).get("data", [])
                     if not data and isinstance(res_json.get("js"), list):
@@ -122,7 +125,7 @@ async def get_valid_session_and_channels():
                     if isinstance(data, list):
                         channels = data
                 except Exception as e:
-                    print(f"Get ordered list error: {e}")
+                    print(f"Get ordered list error details: {e}")
 
             if not channels and genres_map:
                 for gid in genres_map.keys():
