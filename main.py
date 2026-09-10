@@ -1,3 +1,11 @@
+from fastapi import FastAPI, Response, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+import requests
+import threading
+import time
+import json
+import os
+
 PORTAL_URL = "http://iptv.ria-link.tv/stalker_portal/server/load.php"
 MAC_BASE = "00:1A:79:01:60:21"
 BASE_PROXY_URL = "https://tv-fby3.onrender.com"
@@ -86,9 +94,8 @@ def update_playlist():
     
     session = get_session()
     
-    # 1. Аввал категорияларни олиб кўрамиз (агар мавжуд бўлса)
     categories_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
-    genre_ids = ["*"] # '*' - барча жанрлар/каналлар дегани
+    genre_ids = ["*"]
     try:
         cat_resp = session.get(categories_url, timeout=10)
         cats = cat_resp.json().get("js", {})
@@ -103,8 +110,6 @@ def update_playlist():
     channels = []
     seen_cmds = set()
 
-    # 2. Ҳар бир категория бўйича ёки умумий сўров орқали каналларни йиғамиз
-    # Баъзи порталлар жанр бўйича сўрашни талаб қилади (* ёки рақамлар)
     for g_id in genre_ids:
         channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&genre={g_id}&JsHttpRequest=1-xml"
         try:
@@ -112,7 +117,6 @@ def update_playlist():
             res_json = channels_resp.json()
             data = res_json.get("js", {}).get("data", [])
             
-            # Агар data рўйхат бўлса, уларни қўшамиз
             if isinstance(data, list):
                 for ch in data:
                     cmd = ch.get("cmd", "")
@@ -122,7 +126,6 @@ def update_playlist():
         except Exception as e:
             continue
 
-    # Агар юқоридаги усул билан чиқмаса, оддий get_all_channels ни ўзини ишлатамиз
     if not channels:
         try:
             channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
@@ -157,6 +160,7 @@ def update_playlist():
     status_data["total_channels"] = len(channels_list)
     status_data["status"] = "Muvaffaqiyatli ishlayapti ✅" if len(channels_list) > 0 else "Kanal topilmadi ⚠️"
     print("--- UPDATE_PLAYLIST TUGADI ---")
+
 def background_worker():
     while True:
         try:
