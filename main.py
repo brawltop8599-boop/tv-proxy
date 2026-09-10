@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Response, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, Response, Request
+from fastapi.responses import RedirectResponse, PlainTextResponse, JSONResponse
 import httpx
 import time
 import json
 import urllib.parse
+import os
 
 app = FastAPI()
 
@@ -27,11 +28,21 @@ cached_channels = []
 cached_token = ""
 session_time = 0
 
-def get_base_headers(token=""):
-    cookie_str = f"mac={MAC}; stb_lang=en; timezone=Europe/London"
-    if token:
-        cookie_str += f"; token={token}"
-    return {
+async def get_valid_session_and_channels():
+    global cached_channels, cached_token, session_time
+    now = time.time()
+    
+    # Если каналы есть и сессия свежее 5 минут, возвращаем кеш
+    if cached_channels and cached_token and (now - session_time < 300):
+        return cached_token, cached_channels
+
+    cookies = {
+        "mac": MAC,
+        "stb_lang": "en",
+        "timezone": "Europe/London"
+    }
+    
+    headers = {
         "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
         "X-User-Agent": "Model: MAG250; Link: WiFi",
         "Referer": "http://portal.sky2000.ru/stalker_portal/c/index.html",
@@ -39,95 +50,131 @@ def get_base_headers(token=""):
         "Accept-Encoding": "gzip, deflate",
         "Connection": "close",
         "Pragma": "no-cache",
-        "Cookie": cookie_str
     }
 
-async def get_valid_session():
-    global cached_token, session_time
-    now = time.time()
-    if cached_token and (now - session_time < 300):
-        return cached_token
-
-    headers = get_base_headers()
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
-            # Эмулируем последовательность загрузки STB
-            await client.get(BASE_PORTAL_ROOT, headers=headers)
-            await client.get(f"{BASE_PORTAL_ROOT}c/xpcom.common.js", headers=headers)
-            await client.get(f"{BASE_PORTAL_ROOT}c/version.js", headers=headers)
-            
+            # 1. Загрузка корня
+            await client.get(BASE_PORTAL_ROOT)
+
+            # 2. Handshake
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
-            hs_res = await client.get(hs_url, headers=headers)
+            hs_res = await client.get(hs_url)
             hs_data = hs_res.json()
-            token = hs_data.get("js", {}).get("token") or hs_data.get("token", "")
+            js_resp = hs_data.get("js", {})
+            token = js_resp.get("token", "")
+            rand_val = js_resp.get("random", RANDOM)
 
             if token:
+                client.cookies.set("token", token)
+                headers["Authorization"] = f"Bearer {token}"
+                client.headers.update(headers)
+
+            # 3. Profile
+            metrics_data = json.dumps({
+                "type": "stb", "model": "MAG254", "mac": MAC, "sn": SN, "uid": UID, "random": rand_val
+            })
+            token_param = f"&token={token}" if token else ""
+            prof_url = (
+                f"{PORTAL_URL}?type=stb&action=get_profile&JsHttpRequest=1-xml&hd=1"
+                f"{token_param}"
+                "&ver=ImageDescription: 0.2.18-r23-250; ImageDate: Thu Sep 13 11:31:16 EEST 2018; PORTAL version: 5.3.0; API Version: JS API version: 343; STB API version: 146; Player Engine version: 0x58c"
+                f"&num_banks=2&sn={SN}&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi"
+                f"&device_id={DEVICE_ID}&device_id2={DEVICE_ID}&signature={SIGNATURE}"
+                f"&auth_second_step=1&hw_version=1.7-BD-00&not_valid_token=0"
+                f"&metrics={urllib.parse.quote(metrics_data)}"
+                f"&hw_version_2={HW_VERSION_2}&timestamp={int(now)}&api_signature=262&prehash={PREHASH}"
+            )
+            await client.get(prof_url)
+            await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml")
+
+            # 4. Получение жанров
+            genres_map = {}
+            try:
+                genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
+                g_data = genres_res.json().get("js", [])
+                if isinstance(g_data, dict):
+                    g_data = g_data.get("data", [])
+                for g in g_data:
+                    gid = g.get("id")
+                    gtitle = g.get("title", "Umumiy")
+                    if gid is not None:
+                        genres_map[str(gid)] = gtitle
+            except Exception as e:
+                print(f"Genres error: {e}")
+
+            # 5. Получение каналов (несколько методов)
+            channels = []
+            seen_cmds = set()
+
+            try:
+                ch_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
+                ch_json = ch_res.json()
+                js_data = ch_json.get("js", [])
+                data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
+                if isinstance(data, list):
+                    channels = data
+            except Exception as e:
+                print(f"Get all channels error: {e}")
+
+            if not channels:
+                try:
+                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    res = await client.get(list_url).json()
+                    data = res.get("js", {}).get("data", [])
+                    if not data and isinstance(res.get("js"), list):
+                        data = res.get("js", [])
+                    if isinstance(data, list):
+                        channels = data
+                except Exception:
+                    pass
+
+            # Если всё еще пусто, тянем по жанрам
+            if not channels and genres_map:
+                for gid in genres_map.keys():
+                    sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
+                    try:
+                        sub_resp = await client.get(sub_url).json()
+                        sub_data = sub_resp.get("js", {}).get("data", [])
+                        if isinstance(sub_data, list):
+                            for ch in sub_data:
+                                cmd = ch.get("cmd", "")
+                                if cmd and cmd not in seen_cmds:
+                                    seen_cmds.add(cmd)
+                                    channels.append(ch)
+                    except Exception:
+                        pass
+
+            # Форматируем список
+            formatted_channels = []
+            for ch in channels:
+                cmd = ch.get("cmd", "")
+                if cmd and cmd not in seen_cmds:
+                    seen_cmds.add(cmd)
+                if cmd:
+                    genre_id = str(ch.get("tv_genre_id", ch.get("genre_id", "")))
+                    logo = ch.get("logo", "")
+                    if logo and not logo.startswith("http"):
+                        logo = f"http://portal.sky2000.ru/stalker_portal/misc/logos/{logo}"
+                    
+                    formatted_channels.append({
+                        "name": ch.get("name", "Kanal"),
+                        "cmd": cmd,
+                        "timeshift": ch.get("timeshift", 0),
+                        "group_title": genres_map.get(genre_id, "Umumiy"),
+                        "logo": logo
+                    })
+
+            if formatted_channels:
+                cached_channels = formatted_channels
                 cached_token = token
                 session_time = now
-                headers = get_base_headers(token)
+                print(f"Успешно загружено каналов: {len(cached_channels)}")
 
-            timestamp = int(now)
-            metrics = json.dumps({
-                "type": "stb", "model": "MAG254", "mac": MAC, "sn": SN, "uid": UID, "random": RANDOM
-            })
-            
-            prof_url = f"{PORTAL_URL}?type=stb&action=get_profile&JsHttpRequest=1-xml&hd=1&ver=ImageDescription: 0.2.18-r23-250; ImageDate: Thu Sep 13 11:31:16 EEST 2018; PORTAL version: 5.3.0; API Version: JS API version: 343; STB API version: 146; Player Engine version: 0x58c&num_banks=2&sn={SN}&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi&device_id={DEVICE_ID}&device_id2={DEVICE_ID}&signature={SIGNATURE}&auth_second_step=1&hw_version=1.7-BD-00&not_valid_token=0&metrics={urllib.parse.quote(metrics)}&hw_version_2={HW_VERSION_2}&timestamp={timestamp}&api_signature=262&prehash={PREHASH}"
-            
-            await client.get(prof_url, headers=headers)
-            await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml", headers=headers)
         except Exception as e:
             print(f"Session error: {e}")
 
-    return cached_token
-
-async def update_channels_list():
-    global cached_channels
-    token = await get_valid_session()
-    headers = get_base_headers(token)
-    
-    genres_map = {}
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-        try:
-            genres_url = f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml"
-            genres_res = await client.get(genres_url, headers=headers)
-            print(f"Genres raw text: {genres_res.text[:300]}")
-            genres_json = genres_res.json()
-            genres_data = genres_json.get("js", [])
-            if isinstance(genres_data, dict):
-                genres_data = genres_data.get("data", [])
-            for g in genres_data:
-                if g.get("id") and g.get("title"):
-                    genres_map[g["id"]] = g["title"]
-        except Exception as e:
-            print(f"Genres error details: {e}")
-
-        try:
-            channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
-            res = await client.get(channels_url, headers=headers)
-            print(f"Channels raw text: {res.text[:300]}")
-            res_json = res.json()
-            js_data = res_json.get("js", [])
-            data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
-            
-            if data:
-                seen = set()
-                new_channels = []
-                for ch in data:
-                    cmd = ch.get("cmd")
-                    if cmd and cmd not in seen:
-                        seen.add(cmd)
-                        genre_id = ch.get("tv_genre_id") or ch.get("genre_id") or ""
-                        new_channels.append({
-                            "name": ch.get("name") or ch.get("title") or "Kanal",
-                            "cmd": cmd,
-                            "timeshift": ch.get("timeshift", 0),
-                            "group_title": genres_map.get(genre_id, "Umumiy")
-                        })
-                if new_channels:
-                    cached_channels = new_channels
-                    print(f"Successfully cached {len(cached_channels)} channels.")
-        except Exception as e:
-            print(f"Channels fetch error details: {e}")
+    return cached_token, cached_channels
 
 @app.get("/")
 async def root():
@@ -135,16 +182,16 @@ async def root():
 
 @app.get("/pl.m3u8")
 async def get_m3u8(request: Request):
-    if not cached_channels:
-        await update_channels_list()
+    _, channels = await get_valid_session_and_channels()
     
     base_url = str(request.base_url).rstrip("/")
     
     m3u = ["#EXTM3U"]
-    for idx, ch in enumerate(cached_channels):
+    for idx, ch in enumerate(channels):
         shift = f' tvg-shift="{ch["timeshift"]}" catchup="default" catchup-days="3"' if ch["timeshift"] else ""
         group = f' group-title="{ch["group_title"]}"' if ch["group_title"] else ""
-        m3u.append(f'#EXTINF:-1{group}{shift},{ch["name"]}')
+        logo = f' tvg-logo="{ch["logo"]}"' if ch["logo"] else ""
+        m3u.append(f'#EXTINF:-1{group}{shift}{logo},{ch["name"]}')
         m3u.append(f"{base_url}/stream/{idx}?key={STREAM_KEY}")
         
     return Response(content="\n".join(m3u), media_type="audio/x-mpegurl; charset=utf-8")
@@ -154,22 +201,30 @@ async def get_stream(idx: int, key: str):
     if key != STREAM_KEY:
         return RedirectResponse(url=STUB_VIDEO_URL, status_code=302)
         
-    if not cached_channels or idx >= len(cached_channels):
-        await update_channels_list()
-        
-    if idx < 0 or idx >= len(cached_channels):
+    token, channels = await get_valid_session_and_channels()
+    
+    if idx < 0 or idx >= len(channels):
         return RedirectResponse(url=STUB_VIDEO_URL, status_code=302)
         
-    target = cached_channels[idx]
+    target = channels[idx]
     stream_url = ""
     
-    token = await get_valid_session()
-    headers = get_base_headers(token)
-    
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    cookies = {"mac": MAC, "stb_lang": "en", "timezone": "Europe/London"}
+    if token:
+        cookies["token"] = token
+        
+    headers = {
+        "User-Agent": "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 2 rev: 250 Safari/533.3",
+        "X-User-Agent": "Model: MAG250; Link: WiFi",
+        "Referer": "http://portal.sky2000.ru/stalker_portal/c/index.html",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
             link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={urllib.parse.quote(target['cmd'])}&JsHttpRequest=1-xml"
-            link_res = await client.get(link_url, headers=headers)
+            link_res = await client.get(link_url)
             link_data = link_res.json()
             
             stream_cmd = link_data.get("js", {}).get("cmd") or link_data.get("js", {}).get("url") or link_data.get("cmd", "")
@@ -187,8 +242,8 @@ async def get_stream(idx: int, key: str):
             if stream_url and "token=" not in stream_url and token:
                 sep = "&" if "?" in stream_url else "?"
                 stream_url = f"{stream_url}{sep}token={token}"
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Create link error: {e}")
             
         if not stream_url and target["cmd"]:
             fallback = target["cmd"]
