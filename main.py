@@ -7,7 +7,7 @@ import json
 import os
 
 PORTAL_URL = "http://iptv.ria-link.tv/stalker_portal/server/load.php"
-MAC_BASE = "00:1A:79:0D:27:10"  # Skrinshohdagi ishlayotgan MAC manzil
+MAC_BASE = "00:1A:79:0D:27:10"
 BASE_PROXY_URL = "https://tv-fby3.onrender.com"
 
 app = FastAPI()
@@ -39,15 +39,15 @@ def get_session():
     session.cookies.set("timezone", "Europe/London", domain="iptv.ria-link.tv")
     
     try:
-        session.get("http://iptv.ria-link.tv/stalker_portal/c/", timeout=5)
-        session.get("http://iptv.ria-link.tv/stalker_portal/c/version.js", timeout=5)
+        session.get("http://iptv.ria-link.tv/stalker_portal/c/", timeout=15)
+        session.get("http://iptv.ria-link.tv/stalker_portal/c/version.js", timeout=15)
     except Exception:
         pass
         
     token = ""
     try:
         hs_url = "http://iptv.ria-link.tv/stalker_portal/server/load.php?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
-        resp = session.get(hs_url, timeout=10)
+        resp = session.get(hs_url, timeout=20)
         r = resp.json()
         token = r.get("js", {}).get("token", "")
         if token:
@@ -79,8 +79,8 @@ def get_session():
         f"&hw_version_2=664706d2663465ad4cbae0db0c8cff6d48dd02c8&timestamp={int(time.time())}&api_signature=262&prehash=4dc5be07506806521482ae0f0e385a88182091a2"
     )
     try:
-        session.get(prof_url, timeout=10)
-        session.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml", timeout=10)
+        session.get(prof_url, timeout=20)
+        session.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml", timeout=20)
     except Exception as e:
         print(f"Profile/Account xatolik: {e}")
         
@@ -96,10 +96,10 @@ def update_playlist():
     
     try:
         channels_url = f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml"
-        channels_resp = session.get(channels_url, timeout=10)
+        # Увеличен timeout до 30 секунд для борьбы с Read timed out
+        channels_resp = session.get(channels_url, timeout=30)
         res_json = channels_resp.json()
         
-        # Stalkerdan keladigan javob tuzilmasini tekshirish
         data = res_json.get("js", [])
         if isinstance(data, dict):
             channels = data.get("data", [])
@@ -237,7 +237,7 @@ def proxy_stream(index: int):
                 clean_cmd = clean_cmd[len(prefix):].strip()
                 
         link_url = f"{PORTAL_URL}?type=itv&action=create_link&cmd={requests.utils.quote(clean_cmd)}&JsHttpRequest=1-xml"
-        link_res = session.get(link_url, timeout=10).json()
+        link_res = session.get(link_url, timeout=15).json()
         
         stream_cmd = link_res.get("js", {}).get("cmd")
         if stream_cmd:
