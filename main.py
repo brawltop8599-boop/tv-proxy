@@ -35,7 +35,7 @@ async def get_valid_session_and_channels():
     if cached_channels and cached_token and (now - session_time < 300):
         return cached_token, cached_channels
 
-    cookies = {
+    initial_cookies = {
         "mac": MAC,
         "stb_lang": "en",
         "timezone": "Europe/London"
@@ -51,7 +51,8 @@ async def get_valid_session_and_channels():
         "Pragma": "no-cache",
     }
 
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
+    # Открываем клиент с базовыми куками
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=initial_cookies, headers=headers) as client:
         try:
             await client.get(BASE_PORTAL_ROOT)
 
@@ -67,10 +68,10 @@ async def get_valid_session_and_channels():
             token = js_resp.get("token", "")
             rand_val = js_resp.get("random", RANDOM)
 
+            # Сохраняем токен в куки клиента, чтобы он автоматически уходил со всеми последующими запросами
             if token:
                 client.cookies.set("token", token)
-                headers["Authorization"] = f"Bearer {token}"
-                client.headers.update(headers)
+                client.headers["Authorization"] = f"Bearer {token}"
 
             metrics_data = json.dumps({
                 "type": "stb", "model": "MAG254", "mac": MAC, "sn": SN, "uid": UID, "random": rand_val
@@ -86,6 +87,8 @@ async def get_valid_session_and_channels():
                 f"&metrics={urllib.parse.quote(metrics_data)}"
                 f"&hw_version_2={HW_VERSION_2}&timestamp={int(now)}&api_signature=262&prehash={PREHASH}"
             )
+            
+            # Все запросы выполняются внутри одной сессии с автоматическим сохранением кук/токена
             await client.get(prof_url)
             await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml")
 
@@ -126,6 +129,55 @@ async def get_valid_session_and_channels():
             except Exception as e:
                 print(f"Get all channels error: {e}")
 
+            if not channels:
+                try:
+                    list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
+                    res = await client.get(list_url)
+                    res_text = res.text.strip()
+                    if res_text.startswith("{") or res_text.startswith("["):
+                        res_json = res.json()
+                        data = res_json.get("js", {}).get("data", [])
+                        if not data and isinstance(res_json.get("js"), list):
+                            data = res_json.get("js", [])
+                        if isinstance(data, list):
+                            channels = data
+                    else:
+                        print(f"Ordered list non-JSON response: {res_text[:150]}")
+                except Exception as e:
+                    print(f"Get ordered list error: {e}")
+
+            formatted_channels = []
+            for ch in channels:
+                cmd = ch.get("cmd", "")
+                if cmd:
+                    if cmd in seen_cmds:
+                        continue
+                    seen_cmds.add(cmd)
+                    
+                    genre_id = str(ch.get("tv_genre_id", ch.get("genre_id", "")))
+                    logo = ch.get("logo", "")
+                    if logo and not logo.startswith("http"):
+                        logo = f"http://portal.sky2000.ru/stalker_portal/misc/logos/{logo}"
+                    
+                    formatted_channels.append({
+                        "name": ch.get("name", "Kanal"),
+                        "cmd": cmd,
+                        "timeshift": ch.get("timeshift", 0),
+                        "group_title": genres_map.get(genre_id, "Umumiy"),
+                        "logo": logo
+                    })
+
+            if formatted_channels:
+                cached_channels = formatted_channels
+                cached_token = token
+                session_time = now
+                print(f"Успешно загружено каналов: {len(cached_channels)}")
+
+        except Exception as e:
+            print(f"Session error: {e}")
+
+    return cached_token, cached_channels
+    
             if not channels:
                 try:
                     list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml{token_param}"
