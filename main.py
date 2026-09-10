@@ -57,12 +57,12 @@ async def get_valid_session_and_channels():
 
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url)
+            print("HANDSHAKE JAVOBI:", hs_res.text[:300]) # Проверяем, дает ли токен
             hs_data = hs_res.json()
             js_resp = hs_data.get("js", {})
             token = js_resp.get("token", "")
             rand_val = js_resp.get("random", RANDOM)
 
-            # ИСПРАВЛЕНИЕ: Токен корректно прописывается в куки и заголовки клиента
             if token:
                 client.cookies.set("token", token, domain="portal.sky2000.ru", path="/")
                 headers["Authorization"] = f"Bearer {token}"
@@ -88,6 +88,7 @@ async def get_valid_session_and_channels():
             genres_map = {}
             try:
                 genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
+                print("GENRES TEXT:", genres_res.text[:300]) # Что отвечает портал для жанров?
                 g_data = genres_res.json().get("js", [])
                 if isinstance(g_data, dict):
                     g_data = g_data.get("data", [])
@@ -104,6 +105,7 @@ async def get_valid_session_and_channels():
 
             try:
                 ch_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_all_channels&JsHttpRequest=1-xml")
+                print("CHANNELS TEXT:", ch_res.text[:300]) # Что отвечает портал для каналов?
                 ch_json = ch_res.json()
                 js_data = ch_json.get("js", [])
                 data = js_data if isinstance(js_data, list) else (js_data.get("data") or js_data.get("channels") or [])
@@ -116,6 +118,7 @@ async def get_valid_session_and_channels():
                 try:
                     list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
                     res = await client.get(list_url)
+                    print("ORDERED LIST TEXT:", res.text[:300])
                     res_json = res.json()
                     data = res_json.get("js", {}).get("data", [])
                     if not data and isinstance(res_json.get("js"), list):
