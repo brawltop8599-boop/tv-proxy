@@ -32,7 +32,6 @@ async def get_valid_session_and_channels():
     global cached_channels, cached_token, session_time
     now = time.time()
     
-    # Если каналы есть и сессия свежее 5 минут, возвращаем кеш
     if cached_channels and cached_token and (now - session_time < 300):
         return cached_token, cached_channels
 
@@ -54,10 +53,8 @@ async def get_valid_session_and_channels():
 
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, cookies=cookies, headers=headers) as client:
         try:
-            # 1. Загрузка корня
             await client.get(BASE_PORTAL_ROOT)
 
-            # 2. Handshake
             hs_url = f"{PORTAL_URL}?type=stb&action=handshake&token=&JsHttpRequest=1-xml"
             hs_res = await client.get(hs_url)
             hs_data = hs_res.json()
@@ -70,7 +67,6 @@ async def get_valid_session_and_channels():
                 headers["Authorization"] = f"Bearer {token}"
                 client.headers.update(headers)
 
-            # 3. Profile
             metrics_data = json.dumps({
                 "type": "stb", "model": "MAG254", "mac": MAC, "sn": SN, "uid": UID, "random": rand_val
             })
@@ -88,7 +84,6 @@ async def get_valid_session_and_channels():
             await client.get(prof_url)
             await client.get(f"{PORTAL_URL}?type=account_info&action=get_main_info&JsHttpRequest=1-xml")
 
-            # 4. Получение жанров
             genres_map = {}
             try:
                 genres_res = await client.get(f"{PORTAL_URL}?type=itv&action=get_genres&JsHttpRequest=1-xml")
@@ -103,7 +98,6 @@ async def get_valid_session_and_channels():
             except Exception as e:
                 print(f"Genres error: {e}")
 
-            # 5. Получение каналов (несколько методов)
             channels = []
             seen_cmds = set()
 
@@ -120,22 +114,22 @@ async def get_valid_session_and_channels():
             if not channels:
                 try:
                     list_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre=*&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
-                    res = await client.get(list_url).json()
-                    data = res.get("js", {}).get("data", [])
-                    if not data and isinstance(res.get("js"), list):
-                        data = res.get("js", [])
+                    res = await client.get(list_url)
+                    res_json = res.json()
+                    data = res_json.get("js", {}).get("data", [])
+                    if not data and isinstance(res_json.get("js"), list):
+                        data = res_json.get("js", [])
                     if isinstance(data, list):
                         channels = data
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Get ordered list error: {e}")
 
-            # Если всё еще пусто, тянем по жанрам
             if not channels and genres_map:
                 for gid in genres_map.keys():
                     sub_url = f"{PORTAL_URL}?type=itv&action=get_ordered_list&genre={gid}&sortby=number&order=asc&hd=0&fav=0&not_my_genres=0&JsHttpRequest=1-xml"
                     try:
-                        sub_resp = await client.get(sub_url).json()
-                        sub_data = sub_resp.get("js", {}).get("data", [])
+                        sub_resp = await client.get(sub_url)
+                        sub_data = sub_resp.json().get("js", {}).get("data", [])
                         if isinstance(sub_data, list):
                             for ch in sub_data:
                                 cmd = ch.get("cmd", "")
@@ -145,13 +139,14 @@ async def get_valid_session_and_channels():
                     except Exception:
                         pass
 
-            # Форматируем список
             formatted_channels = []
             for ch in channels:
                 cmd = ch.get("cmd", "")
-                if cmd and cmd not in seen_cmds:
-                    seen_cmds.add(cmd)
                 if cmd:
+                    if cmd in seen_cmds:
+                        continue
+                    seen_cmds.add(cmd)
+                    
                     genre_id = str(ch.get("tv_genre_id", ch.get("genre_id", "")))
                     logo = ch.get("logo", "")
                     if logo and not logo.startswith("http"):
