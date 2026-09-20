@@ -6,19 +6,16 @@ from fastapi.responses import PlainTextResponse, StreamingResponse, RedirectResp
 
 app = FastAPI()
 
-# Сюда вы вставляете свой исходный плейлист через переменные окружения Vercel (PLAYLIST_DATA)
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
 
-# Создаем глобальный клиент для скорости и стабильности
+# Создаем глобальный HTTP-клиент для стабильности и скорости
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
 
 def encode_url(url: str) -> str:
-    """Кодирует длинную ссылку в Base64"""
     return base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8').rstrip("=")
 
 def decode_url(encoded_str: str) -> str:
-    """Раскодирует Base64 обратно в длинную ссылку"""
     try:
         padding = 4 - (len(encoded_str) % 4)
         if padding < 4:
@@ -28,7 +25,6 @@ def decode_url(encoded_str: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid stream token")
 
 def get_encoded_streams():
-    """Собирает все потоки из плейлиста в список и кодирует их"""
     lines = PLAYLIST_TEXT.splitlines()
     tokens = []
     for line in lines:
@@ -39,7 +35,6 @@ def get_encoded_streams():
 
 @app.get("/", response_class=PlainTextResponse)
 def get_playlist(request: Request):
-    # Определяем адрес вашего деплоя на Vercel автоматически
     host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
     protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
     base_url = f"{protocol}://{host_url}"
@@ -53,7 +48,7 @@ def get_playlist(request: Request):
         if not line:
             continue
         
-        # Вместо длинной каши делаем красивые короткие индексы: /r/0, /r/1, /r/2 ...
+        # Делаем красивые короткие индексы на выходе
         if not line.startswith("#"):
             full_link = f"{base_url}/r/{stream_index}?tv={SECRET_KEY}"
             new_lines.append(full_link)
@@ -61,15 +56,14 @@ def get_playlist(request: Request):
         else:
             new_lines.append(line)
 
-    return "\n".join(new_lines)
+    return PlainTextResponse("\n".join(new_lines), media_type="application/x-mpegurl")
 
 @app.get("/r/{token}")
-async def handle_request(token: str, tv: str = None):
-    """Принимает либо короткий индекс (цифру), либо Base64-токен и проксирует поток"""
+async def handle_request(request: Request, token: str, tv: str = None):
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Если пришла цифра (индекс из плейлиста), перенаправляем на защищенный Base64-токен
+    # Если пришла цифра — перенаправляем на зашифрованный токен
     if token.isdigit():
         index = int(token)
         tokens = get_encoded_streams()
@@ -77,20 +71,67 @@ async def handle_request(token: str, tv: str = None):
             raise HTTPException(status_code=404, detail="Stream not found")
         
         encoded_token = tokens[index]
-        host_url = os.environ.get("VERCEL_URL", "localhost:8000")
-        return RedirectResponse(url=f"/r/{encoded_token}?tv={SECRET_KEY}", status_code=302)
+        host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
+        protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
+        base_url = f"{protocol}://{host_url}"
+        return RedirectResponse(url=f"{base_url}/r/{encoded_token}?tv={SECRET_KEY}", status_code=302)
 
-    # Если пришел сам Base64-токен — расшифровываем и стримим
-    target_url = decode_url(token)
-    
-    try:
-        req = http_client.build_request("GET", target_url, headers={"User-Agent": "VLC/3.0.18 LibVLC/3.0.18"})
-        r = await http_client.send(req, stream=True)
+    else:
+        target_url = decode_url(token)
 
-        return StreamingResponse(
-            r.aiter_bytes(),
-            status_code=r.status_code,
-            media_type=r.headers.get("content-type", "video/mp2t")
-        )
-    except Exception:
-        raise HTTPException(status_code=502, detail="Failed to fetch upstream stream")
+        host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
+        protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
+        base_url = f"{protocol}://{host_url}"
+
+        try:
+            # Берем User-Agent от плеера
+            client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
+            
+            req = http_client.build_request("GET", target_url, headers={"User-Agent": client_ua})
+            r = await http_client.send(req, stream=True)
+
+            content_type = r.headers.get("content-type", "")
+
+            # Если провайдер отдал плейлист (.m3u8), полностью переписываем ссылки ВНУТРИ него, чтобы не было палева
+            if "mpegurl" in content_type or "vnd.apple.mpegurl" in content_type or target_url.endswith(".m3u8"):
+                playlist_content = await r.aread()
+                playlist_text = playlist_content.decode('utf-8', errors='ignore')
+                lines = playlist_text.splitlines()
+                rewritten_lines = []
+
+                for line in lines:
+                    line_str = line.strip()
+                    if line_str and not line_str.startswith("#"):
+                        # Обрабатываем относительные и абсолютные ссылки внутри плейлиста
+                        if not line_str.startswith("http"):
+                            base_path = target_url.rsplit("/", 1)[0]
+                            absolute_sub_url = f"{base_path}/{line_str}"
+                        else:
+                            absolute_sub_url = line_str
+
+                        # Заворачиваем каждую внутреннюю строчку в наш прокси-токен
+                        sub_token = encode_url(absolute_sub_url)
+                        rewritten_lines.append(f"{base_url}/r/{sub_token}?tv={SECRET_KEY}")
+                    else:
+                        rewritten_lines.append(line)
+
+                return PlainTextResponse("\n".join(rewritten_lines), status_code=r.status_code, media_type="application/vnd.apple.mpegurl")
+
+            else:
+                # Если это сам поток (видео-чанки), стримим как есть
+                async def stream_generator():
+                    try:
+                        async for chunk in r.aiter_bytes(chunk_size=65536):
+                            if chunk:
+                                yield chunk
+                    except Exception:
+                        pass
+
+                return StreamingResponse(
+                    stream_generator(),
+                    status_code=r.status_code,
+                    media_type=content_type or "video/mp2t"
+                )
+
+        except Exception:
+            raise HTTPException(status_code=502, detail="Failed to fetch upstream stream")
