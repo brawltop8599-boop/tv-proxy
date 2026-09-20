@@ -14,6 +14,22 @@ PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=10.0)
 
+# === ФУНКЦИИ ШИФРОВАНИЯ (чтобы нельзя было расшифровать Base64) ===
+def encrypt_url(url: str) -> str:
+    key = SECRET_KEY.encode()
+    data = url.encode()
+    xored = bytearray(b ^ key[i % len(key)] for i, b in enumerate(data))
+    return base64.urlsafe_b64encode(xored).decode('utf-8').rstrip("=")
+
+def decrypt_url(token: str) -> str:
+    padding = 4 - (len(token) % 4)
+    if padding < 4:
+        token += "=" * padding
+    decoded_bytes = base64.urlsafe_b64decode(token.encode('utf-8'))
+    key = SECRET_KEY.encode()
+    orig = bytearray(b ^ key[i % len(key)] for i, b in enumerate(decoded_bytes))
+    return orig.decode('utf-8')
+
 # === ЧЁРНЫЙ СПИСОК IP И ПОДСЕТЕЙ ===
 BANNED_IPS = {
     "5.253.66.62", "23.106.249.56", "23.106.253.18", "31.3.156.64", "38.180.180.126", "46.150.71.146", "91.214.82.125", "109.86.19.135", "217.12.223.190", "188.233.60.20",
@@ -31,8 +47,8 @@ BANNED_IPS = {
 
 BANNED_PREFIXES = (
     "2a09:bac5:", "2a02:3032:", "2a09:bac1:", "2a12:bec4:", "2a01:e5c0:", "2a02:2378:",
-    "2a02:4780:", "2001:49f0:", "2a14:a087:", "2a01:4f8:", "2001:ac8:", "2a03:d000:",
-    "2001:16b8:", "2a0e:d604:", "2a06:98c0:", "2a01:4f9:", "51.158.201.",
+    "2a02:4780:", "2001:49f0:", "2a14:a087:", "2001:4f8:", "2001:ac8:", "2a03:d000:",
+    "2001:16b8:", "2a0e:d604:", "2a06:98c0:", "2001:4f9:", "51.158.201.",
     "149.154.161.", "94.158.58.", "81.19.141.", "93.152.224.", "80.66.72.",
     "91.92.33.", "5.255.", "2a12:5940:", "45.45.", "104.204.", "161.129.",
     "174.136.203.", "104.28.", "87.250.", "2a05:45c2:", "2a01:73c0:",
@@ -75,7 +91,6 @@ def get_playlist(request: Request):
     client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
     user_key = request.query_params.get("tv")
 
-    # 1. Перехват для Telegram (превью ссылки на корень)
     if "telegrambot" in ua:
         preview_html = f"""<!DOCTYPE html>
         <html>
@@ -91,14 +106,12 @@ def get_playlist(request: Request):
         </html>"""
         return Response(content=preview_html, media_type="text/html; charset=utf-8")
 
-    # Проверка IP и поисковых ботов
     is_search_bot = any(b in ua for b in ["google", "bot", "crawler", "spider", "yandex"])
     is_banned_ip = client_ip in BANNED_IPS or client_ip.startswith(BANNED_PREFIXES)
     
     if is_search_bot or is_banned_ip:
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
-    # 2. ЖЕСТКИЙ БЛОК ВСЕХ БРАУЗЕРОВ (И ПК, И МОБИЛЬНЫХ)
     browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
     is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
     is_any_browser = any(b in ua for b in browser_keywords) and not is_player
@@ -106,16 +119,13 @@ def get_playlist(request: Request):
     if is_any_browser:
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
-    # 3. ПРОВЕРКА СКАНЕРОВ (если нет ключа ?tv=)
     bad_user_agents = ["curl", "wget", "python-requests", "go-http-client", "scanner"]
     if any(agent in ua for agent in bad_user_agents) and not user_key:
         raise HTTPException(status_code=403, detail="Blocked: Bot detected")
 
-    # 4. Если ключ неверный — отдаем фейк-плейлист
     if user_key != SECRET_KEY:
         return get_fake_playlist_response()
 
-    # 5. Генерация настоящего плейлиста
     lines = PLAYLIST_TEXT.splitlines()
     new_lines = []
     stream_index = 0
@@ -138,7 +148,6 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
     ua = (request.headers.get("user-agent") or "").lower()
     client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
 
-    # Перехват для Telegram-бота (чтобы рисовалась красивая карточка)
     if "telegrambot" in ua:
         host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
         protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
@@ -157,7 +166,6 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
         </html>"""
         return Response(content=preview_html, media_type="text/html; charset=utf-8")
 
-    # ЖЕСТКИЙ БЛОК БРАУЗЕРОВ И ДЛЯ ПРЯМЫХ ССЫЛОК НА КАНАЛЫ (отправляем в Telegram)
     browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
     is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
     is_any_browser = any(b in ua for b in browser_keywords) and not is_player
@@ -197,8 +205,9 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
                         else:
                             absolute_sub_url = line_str
 
-                        encoded_sub = base64.urlsafe_b64encode(absolute_sub_url.encode('utf-8')).decode('utf-8').rstrip("=")
-                        rewritten_lines.append(f"{base_url}/sub/{encoded_sub}?tv={SECRET_KEY}")
+                        # ИСПОЛЬЗУЕМ НАСТОЯЩЕЕ ШИФРОВАНИЕ ВМЕСТО BASE64
+                        encrypted_sub = encrypt_url(absolute_sub_url)
+                        rewritten_lines.append(f"{base_url}/sub/{encrypted_sub}?tv={SECRET_KEY}")
                     else:
                         rewritten_lines.append(line)
 
@@ -210,14 +219,22 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
 
 @app.get("/sub/{token}")
 async def handle_sub_request(request: Request, token: str, tv: str = None):
+    ua = (request.headers.get("user-agent") or "").lower()
+    client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
+
+    # БЛОКИРУЕМ БРАУЗЕРЫ И НА /sub/ (ПЕРЕНАПРАВЛЯЕМ В ТЕЛЕГРАМ)
+    browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
+    is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
+    is_any_browser = any(b in ua for b in browser_keywords) and not is_player
+
+    if is_any_browser or client_ip in BANNED_IPS or client_ip.startswith(BANNED_PREFIXES):
+        return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
+
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
     
     try:
-        padding = 4 - (len(token) % 4)
-        if padding < 4:
-            token += "=" * padding
-        target_url = base64.urlsafe_b64decode(token.encode('utf-8')).decode('utf-8')
+        target_url = decrypt_url(token)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid token")
 
