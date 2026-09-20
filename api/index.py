@@ -9,6 +9,9 @@ app = FastAPI()
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
 
+# Создаем глобальный HTTP-клиент для переиспользования соединений (убирает утечки и ускоряет работу)
+http_client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
+
 def encode_url(url: str) -> str:
     return base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8').rstrip("=")
 
@@ -75,32 +78,29 @@ async def handle_request(request: Request, token: str, tv: str = None):
         protocol = "https" if "vercel.app" in host_url or request.url.scheme == "https" else "http"
         base_url = f"{protocol}://{host_url}"
 
-        client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
-        
         try:
-            # Запрашиваем контент у провайдера
-            req = client.build_request("GET", target_url, headers={"User-Agent": "Mozilla/5.0"})
-            r = await client.send(req)
+            # Запрашиваем контент у провайдера через общий клиент
+            req = http_client.build_request("GET", target_url, headers={"User-Agent": "Mozilla/5.0"})
+            r = await http_client.send(req, stream=True)
 
             content_type = r.headers.get("content-type", "")
 
-            # Если провайдер отдал плейлист (.m3u8), переписываем ссылки внутри него!
+            # Если провайдер отдал плейлист (.m3u8), переписываем ссылки внутри него
             if "mpegurl" in content_type or "vnd.apple.mpegurl" in content_type or target_url.endswith(".m3u8"):
-                playlist_content = r.text
-                lines = playlist_content.splitlines()
+                playlist_content = await r.aread()
+                playlist_text = playlist_content.decode('utf-8', errors='ignore')
+                lines = playlist_text.splitlines()
                 rewritten_lines = []
 
                 for line in lines:
                     line_str = line.strip()
                     if line_str and not line_str.startswith("#"):
-                        # Если ссылка внутри плейлиста относительная, превращаем в абсолютную к источнику
                         if not line_str.startswith("http"):
                             base_path = target_url.rsplit("/", 1)[0]
                             absolute_sub_url = f"{base_path}/{line_str}"
                         else:
                             absolute_sub_url = line_str
 
-                        # Заворачиваем внутреннюю ссылку в наш Base64-прокси
                         sub_token = encode_url(absolute_sub_url)
                         rewritten_lines.append(f"{base_url}/r/{sub_token}?tv={SECRET_KEY}")
                     else:
@@ -109,10 +109,14 @@ async def handle_request(request: Request, token: str, tv: str = None):
                 return PlainTextResponse("\n".join(rewritten_lines), status_code=r.status_code)
 
             else:
-                # Если это сам видеопоток (трансляция сегментов TS), стримим его как есть
+                # Стриминг видеофрагментов с защитой от обрывов
                 async def stream_generator():
-                    async for chunk in r.aiter_bytes():
-                        yield chunk
+                    try:
+                        async for chunk in r.aiter_bytes(chunk_size=65536):
+                            if chunk:
+                                yield chunk
+                    except Exception:
+                        pass # Предотвращает падение при кратковременном обрыве связи с источником
 
                 return StreamingResponse(
                     stream_generator(),
@@ -120,5 +124,5 @@ async def handle_request(request: Request, token: str, tv: str = None):
                     media_type=content_type or "video/mp2t"
                 )
 
-        except Exception:
-            raise HTTPException(status_code=502, detail="Failed to fetch upstream stream")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch upstream stream: {str(e)}")
