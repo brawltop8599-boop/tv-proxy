@@ -9,7 +9,6 @@ app = FastAPI()
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
 
-# Создаем глобальный HTTP-клиент для стабильности и скорости
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
 
 def encode_url(url: str) -> str:
@@ -48,7 +47,6 @@ def get_playlist(request: Request):
         if not line:
             continue
         
-        # Делаем красивые короткие индексы на выходе
         if not line.startswith("#"):
             full_link = f"{base_url}/r/{stream_index}?tv={SECRET_KEY}"
             new_lines.append(full_link)
@@ -56,14 +54,13 @@ def get_playlist(request: Request):
         else:
             new_lines.append(line)
 
-    return PlainTextResponse("\n".join(new_lines), media_type="application/x-mpegurl")
+    return "\n".join(new_lines)
 
 @app.get("/r/{token}")
 async def handle_request(request: Request, token: str, tv: str = None):
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Если пришла цифра — перенаправляем на зашифрованный токен
     if token.isdigit():
         index = int(token)
         tokens = get_encoded_streams()
@@ -84,7 +81,6 @@ async def handle_request(request: Request, token: str, tv: str = None):
         base_url = f"{protocol}://{host_url}"
 
         try:
-            # Берем User-Agent от плеера
             client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
             
             req = http_client.build_request("GET", target_url, headers={"User-Agent": client_ua})
@@ -92,7 +88,6 @@ async def handle_request(request: Request, token: str, tv: str = None):
 
             content_type = r.headers.get("content-type", "")
 
-            # Если провайдер отдал плейлист (.m3u8), полностью переписываем ссылки ВНУТРИ него, чтобы не было палева
             if "mpegurl" in content_type or "vnd.apple.mpegurl" in content_type or target_url.endswith(".m3u8"):
                 playlist_content = await r.aread()
                 playlist_text = playlist_content.decode('utf-8', errors='ignore')
@@ -102,23 +97,20 @@ async def handle_request(request: Request, token: str, tv: str = None):
                 for line in lines:
                     line_str = line.strip()
                     if line_str and not line_str.startswith("#"):
-                        # Обрабатываем относительные и абсолютные ссылки внутри плейлиста
                         if not line_str.startswith("http"):
                             base_path = target_url.rsplit("/", 1)[0]
                             absolute_sub_url = f"{base_path}/{line_str}"
                         else:
                             absolute_sub_url = line_str
 
-                        # Заворачиваем каждую внутреннюю строчку в наш прокси-токен
                         sub_token = encode_url(absolute_sub_url)
                         rewritten_lines.append(f"{base_url}/r/{sub_token}?tv={SECRET_KEY}")
                     else:
                         rewritten_lines.append(line)
 
-                return PlainTextResponse("\n".join(rewritten_lines), status_code=r.status_code, media_type="application/vnd.apple.mpegurl")
+                return PlainTextResponse("\n".join(rewritten_lines), status_code=r.status_code)
 
             else:
-                # Если это сам поток (видео-чанки), стримим как есть
                 async def stream_generator():
                     try:
                         async for chunk in r.aiter_bytes(chunk_size=65536):
