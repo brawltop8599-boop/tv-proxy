@@ -2,11 +2,10 @@ import base64
 import httpx
 import os
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse, RedirectResponse
 
 app = FastAPI()
 
-# Ваш исходный плейлист (сюда можно вставлять длинные ссылки)
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
 
@@ -25,7 +24,7 @@ def decode_url(encoded_str: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid stream token")
 
 def get_encoded_streams():
-    """Собирает все потоки и сразу превращает их в Base64-токены"""
+    """Собирает все потоки и превращает их в Base64-токены"""
     lines = PLAYLIST_TEXT.splitlines()
     tokens = []
     for line in lines:
@@ -36,7 +35,7 @@ def get_encoded_streams():
 
 @app.get("/", response_class=PlainTextResponse)
 def get_playlist(request: Request):
-    """Отдает плейлист с короткими ссылками-индексами вида /r/0?tv=tvzatak"""
+    """Отдает плейлист с короткими ссылками-индексами"""
     host_url = os.environ.get("VERCEL_URL", "localhost:8000")
     protocol = "https" if "vercel.app" in host_url or request.url.scheme == "https" else "http"
     base_url = f"{protocol}://{host_url}"
@@ -51,7 +50,7 @@ def get_playlist(request: Request):
             continue
         
         if not line.startswith("#"):
-            # Генерируем короткую ссылку-обманку с индексом
+            # В плейлисте короткая ссылка с индексом
             full_link = f"{base_url}/r/{stream_index}?tv={SECRET_KEY}"
             new_lines.append(full_link)
             stream_index += 1
@@ -61,27 +60,34 @@ def get_playlist(request: Request):
     return "\n".join(new_lines)
 
 @app.get("/r/{index}")
-async def proxy_stream_by_index(index: int, tv: str = None):
+def redirect_to_base64(index: int, tv: str = None):
     """
-    Принимает короткий индекс из плейлиста, достает нужный Base64-токен,
-    раскодирует его и начинает проксировать видеопоток
+    Шаг 1: При открытии короткого индекса сервер делает редирект (302) 
+    на ту самую Base64-кашу (/r/aHR0cHM...), чтобы её было видно при вскрытии!
     """
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
     tokens = get_encoded_streams()
-    
     if not (0 <= index < len(tokens)):
         raise HTTPException(status_code=404, detail="Stream not found")
     
-    # Получаем ту самую Base64-кашу для конкретного индекса
     encoded_token = tokens[index]
     
-    # Превращаем Base64 обратно в реальный URL источника (например, ipservice.tv)
+    # Перенаправляем на роут с Base64-кашей
+    return RedirectResponse(url=f"/r/{encoded_token}?tv={SECRET_KEY}", status_code=302)
+
+@app.get("/r/{encoded_token:path}")
+async def proxy_base64_stream(encoded_token: str, tv: str = None):
+    """
+    Шаг 2: Принимает Base64-кашу, расшифровывает и проксирует реальный поток
+    """
+    if tv != SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     target_url = decode_url(encoded_token)
 
     client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
-    
     try:
         req = client.build_request("GET", target_url, headers={"User-Agent": "Mozilla/5.0"})
         r = await client.send(req, stream=True)
