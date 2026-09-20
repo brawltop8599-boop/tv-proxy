@@ -62,14 +62,13 @@ def get_playlist(request: Request):
 @app.get("/r/{token}")
 async def handle_request(token: str, tv: str = None):
     """
-    Универсальный обработчик:
-    1. Если передан цифровой индекс (например, /r/0) — редиректит на Base64-кашу.
-    2. Если передана сама Base64-каша (например, /r/aHR0c...) — расшифровывает и проксирует поток.
+    1. Если это цифра (/r/0) -> редиректим на вашу же Base64-кашу (/r/aHR0c...). 
+       В строке адреса теперь видна каша, а не ipservice.tv!
+    2. Если это текст (каша) -> расшифровываем и проксируем поток.
     """
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Проверяем, число ли это (индекс из плейлиста)
     if token.isdigit():
         index = int(token)
         tokens = get_encoded_streams()
@@ -77,11 +76,11 @@ async def handle_request(token: str, tv: str = None):
             raise HTTPException(status_code=404, detail="Stream not found")
         
         encoded_token = tokens[index]
-        # Делаем редирект на ту самую Base64-кашу, чтобы её было видно при вскрытии
+        # Редирект идет на ВАШ ЖЕ домен с Base64-токеном
         return RedirectResponse(url=f"/r/{encoded_token}?tv={SECRET_KEY}", status_code=302)
     
     else:
-        # Если прилетела Base64-каша — расшифровываем и проксируем реальный поток
+        # Срабатывает, когда открыта ссылка с кашей — запускаем проксирование
         target_url = decode_url(token)
 
         client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
