@@ -75,7 +75,7 @@ def get_playlist(request: Request):
     client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
     user_key = request.query_params.get("tv")
 
-    # 1. Специфический перехват для Telegram (Open Graph превью)
+    # 1. Перехват для Telegram (превью ссылки)
     if "telegrambot" in ua:
         preview_html = f"""<!DOCTYPE html>
         <html>
@@ -91,28 +91,35 @@ def get_playlist(request: Request):
         </html>"""
         return Response(content=preview_html, media_type="text/html; charset=utf-8")
 
-    # 2. Проверка безопасности и ботов
+    # Проверка IP и поисковых ботов
     is_search_bot = any(b in ua for b in ["google", "bot", "crawler", "spider", "yandex"])
     is_banned_ip = client_ip in BANNED_IPS or client_ip.startswith(BANNED_PREFIXES)
     
     if is_search_bot or is_banned_ip:
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
-    # 3. Жесткий блок ПК и обычных браузеров
-    is_desktop_or_browser = any(b in ua for b in ["windows", "macintosh", "chrome", "safari", "firefox", "edg", "opera", "msie", "trident"]) or ("linux" in ua and "android" not in ua)
-    if is_desktop_or_browser:
+    # 2. ЖЕСТКИЙ БЛОК ВСЕХ БРАУЗЕРОВ (И ПК, И МОБИЛЬНЫХ)
+    # Если в User-Agent есть признаки стандартного браузера — отправляем в Telegram
+    browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
+    
+    # Исключаем плееры (если в строке есть VLC, Televizo, TiviMate или это чистое Android-приложение без признаков браузера)
+    is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
+    
+    is_any_browser = any(b in ua for b in browser_keywords) and not is_player
+
+    if is_any_browser:
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
-    # 4. Проверка сканеров (если нет ключа ?tv=)
+    # 3. ПРОВЕРКА СКАНЕРОВ (если нет ключа ?tv=)
     bad_user_agents = ["curl", "wget", "python-requests", "go-http-client", "scanner"]
     if any(agent in ua for agent in bad_user_agents) and not user_key:
         raise HTTPException(status_code=403, detail="Blocked: Bot detected")
 
-    # 5. Если ключ неверный — отдаем фейк-плейлист
+    # 4. Если ключ неверный — отдаем фейк-плейлист
     if user_key != SECRET_KEY:
         return get_fake_playlist_response()
 
-    # 6. Генерация настоящего защищенного плейлиста с короткими индексами
+    # 5. Генерация настоящего плейлиста
     lines = PLAYLIST_TEXT.splitlines()
     new_lines = []
     stream_index = 0
@@ -145,7 +152,6 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
     protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
     base_url = f"{protocol}://{host_url}"
 
-    # Если это m3u8, скачиваем текст и маскируем внутренности
     if ".m3u8" in target_url.lower() or "mpegurl" in target_url.lower():
         try:
             client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
@@ -174,7 +180,6 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
         except Exception:
             pass
 
-    # Для видео-потоков — мгновенный редирект
     return RedirectResponse(url=target_url, status_code=302)
 
 @app.get("/sub/{token}")
