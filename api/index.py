@@ -88,42 +88,46 @@ async def handle_request(request: Request, token: str, tv: str = None):
 
             content_type = r.headers.get("content-type", "")
 
-            if "mpegurl" in content_type or "vnd.apple.mpegurl" in content_type or target_url.endswith(".m3u8"):
-                playlist_content = await r.aread()
-                playlist_text = playlist_content.decode('utf-8', errors='ignore')
-                lines = playlist_text.splitlines()
-                rewritten_lines = []
+            # Безопасная проверка: если это реальный текстовый плейлист m3u8, переписываем внутренности
+            if any(ext in target_url for ext in [".m3u8", "mpegurl"]) and r.status_code == 200:
+                try:
+                    playlist_content = await r.aread()
+                    playlist_text = playlist_content.decode('utf-8', errors='ignore')
+                    lines = playlist_text.splitlines()
+                    rewritten_lines = []
 
-                for line in lines:
-                    line_str = line.strip()
-                    if line_str and not line_str.startswith("#"):
-                        if not line_str.startswith("http"):
-                            base_path = target_url.rsplit("/", 1)[0]
-                            absolute_sub_url = f"{base_path}/{line_str}"
+                    for line in lines:
+                        line_str = line.strip()
+                        if line_str and not line_str.startswith("#"):
+                            if not line_str.startswith("http"):
+                                base_path = target_url.rsplit("/", 1)[0]
+                                absolute_sub_url = f"{base_path}/{line_str}"
+                            else:
+                                absolute_sub_url = line_str
+
+                            sub_token = encode_url(absolute_sub_url)
+                            rewritten_lines.append(f"{base_url}/r/{sub_token}?tv={SECRET_KEY}")
                         else:
-                            absolute_sub_url = line_str
+                            rewritten_lines.append(line)
 
-                        sub_token = encode_url(absolute_sub_url)
-                        rewritten_lines.append(f"{base_url}/r/{sub_token}?tv={SECRET_KEY}")
-                    else:
-                        rewritten_lines.append(line)
+                    return PlainTextResponse("\n".join(rewritten_lines), status_code=r.status_code)
+                except Exception:
+                    pass # Если парсинг сорвался, пробрасываем поток дальше без падения
 
-                return PlainTextResponse("\n".join(rewritten_lines), status_code=r.status_code)
+            # Во всех остальных случаях (потоки, видео, чанки) пускаем стабильный стриминг
+            async def stream_generator():
+                try:
+                    async for chunk in r.aiter_bytes(chunk_size=65536):
+                        if chunk:
+                            yield chunk
+                except Exception:
+                    pass
 
-            else:
-                async def stream_generator():
-                    try:
-                        async for chunk in r.aiter_bytes(chunk_size=65536):
-                            if chunk:
-                                yield chunk
-                    except Exception:
-                        pass
-
-                return StreamingResponse(
-                    stream_generator(),
-                    status_code=r.status_code,
-                    media_type=content_type or "video/mp2t"
-                )
+            return StreamingResponse(
+                stream_generator(),
+                status_code=r.status_code,
+                media_type=content_type or "video/mp2t"
+            )
 
         except Exception:
             raise HTTPException(status_code=502, detail="Failed to fetch upstream stream")
