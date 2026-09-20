@@ -10,33 +10,9 @@ app = FastAPI()
 SECRET_KEY = "tvzatak"
 TELEGRAM_GROUP = "https://t.me/+2lWVU6CKQsVkMWRi"
 MAINTENANCE_VIDEO = "https://github.com/brawltop8599-boop/ads-stub/raw/refs/heads/main/v.mp4"
-
-# Ссылка на ваш реальный плейлист (например, загруженный на GitHub Gist или Pastebin в сыром виде)
-PLAYLIST_URL = os.environ.get("PLAYLIST_URL", "")
+PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=10.0)
-
-async def get_playlist_text():
-    """Скачивает актуальный плейлист по внешней ссылке"""
-    if not PLAYLIST_URL:
-        return "#EXTM3U"
-    try:
-        r = await http_client.get(PLAYLIST_URL)
-        if r.status_code == 200:
-            return r.text
-    except Exception:
-        pass
-    return "#EXTM3U"
-
-async def get_streams_list():
-    playlist_text = await get_playlist_text()
-    lines = playlist_text.splitlines()
-    streams = []
-    for line in lines:
-        line = line.strip()
-        if line and not line.startswith("#"):
-            streams.append(line)
-    return streams
 
 # === ЧЁРНЫЙ СПИСОК IP И ПОДСЕТЕЙ ===
 BANNED_IPS = {
@@ -63,6 +39,15 @@ BANNED_PREFIXES = (
     "2001:1e98:", "144.31.141.", "213.180.", "95.85.228.", "188.163.", "205.210.31."
 )
 
+def get_streams_list():
+    lines = PLAYLIST_TEXT.splitlines()
+    streams = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#"):
+            streams.append(line)
+    return streams
+
 def get_fake_playlist_response():
     fake_channels = ["TEAM✨TV", "TVPlay✨", "VeleS✨TV", "Oasis✨TV", "Sat✨Tv", "Olsib✨Tv", "TVboom.TV", "Kernel.TV", "Чебур✨", "Velilla.TV"]
     channel_logo = "https://i.ibb.co/MCPX1NK/1.png"
@@ -81,7 +66,7 @@ def get_fake_playlist_response():
     )
 
 @app.get("/")
-async def get_playlist(request: Request):
+def get_playlist(request: Request):
     host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
     protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
     base_url = f"{protocol}://{host_url}"
@@ -90,6 +75,7 @@ async def get_playlist(request: Request):
     client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
     user_key = request.query_params.get("tv")
 
+    # 1. Специфический перехват для Telegram (Open Graph превью)
     if "telegrambot" in ua:
         preview_html = f"""<!DOCTYPE html>
         <html>
@@ -105,25 +91,29 @@ async def get_playlist(request: Request):
         </html>"""
         return Response(content=preview_html, media_type="text/html; charset=utf-8")
 
+    # 2. Проверка безопасности и ботов
     is_search_bot = any(b in ua for b in ["google", "bot", "crawler", "spider", "yandex"])
     is_banned_ip = client_ip in BANNED_IPS or client_ip.startswith(BANNED_PREFIXES)
     
     if is_search_bot or is_banned_ip:
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
+    # 3. Жесткий блок ПК и обычных браузеров
     is_desktop_or_browser = any(b in ua for b in ["windows", "macintosh", "chrome", "safari", "firefox", "edg", "opera", "msie", "trident"]) or ("linux" in ua and "android" not in ua)
     if is_desktop_or_browser:
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
+    # 4. Проверка сканеров (если нет ключа ?tv=)
     bad_user_agents = ["curl", "wget", "python-requests", "go-http-client", "scanner"]
     if any(agent in ua for agent in bad_user_agents) and not user_key:
         raise HTTPException(status_code=403, detail="Blocked: Bot detected")
 
+    # 5. Если ключ неверный — отдаем фейк-плейлист
     if user_key != SECRET_KEY:
         return get_fake_playlist_response()
 
-    playlist_text = await get_playlist_text()
-    lines = playlist_text.splitlines()
+    # 6. Генерация настоящего защищенного плейлиста с короткими индексами
+    lines = PLAYLIST_TEXT.splitlines()
     new_lines = []
     stream_index = 0
 
@@ -145,7 +135,7 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    streams = await get_streams_list()
+    streams = get_streams_list()
     if not (0 <= index < len(streams)):
         raise HTTPException(status_code=404, detail="Stream not found")
 
@@ -155,6 +145,7 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
     protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
     base_url = f"{protocol}://{host_url}"
 
+    # Если это m3u8, скачиваем текст и маскируем внутренности
     if ".m3u8" in target_url.lower() or "mpegurl" in target_url.lower():
         try:
             client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
@@ -183,6 +174,7 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
         except Exception:
             pass
 
+    # Для видео-потоков — мгновенный редирект
     return RedirectResponse(url=target_url, status_code=302)
 
 @app.get("/sub/{token}")
