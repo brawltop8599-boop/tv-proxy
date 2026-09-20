@@ -75,7 +75,7 @@ def get_playlist(request: Request):
     client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
     user_key = request.query_params.get("tv")
 
-    # 1. Перехват для Telegram (превью ссылки)
+    # 1. Перехват для Telegram (превью ссылки на корень)
     if "telegrambot" in ua:
         preview_html = f"""<!DOCTYPE html>
         <html>
@@ -99,12 +99,8 @@ def get_playlist(request: Request):
         return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
 
     # 2. ЖЕСТКИЙ БЛОК ВСЕХ БРАУЗЕРОВ (И ПК, И МОБИЛЬНЫХ)
-    # Если в User-Agent есть признаки стандартного браузера — отправляем в Telegram
     browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
-    
-    # Исключаем плееры (если в строке есть VLC, Televizo, TiviMate или это чистое Android-приложение без признаков браузера)
     is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
-    
     is_any_browser = any(b in ua for b in browser_keywords) and not is_player
 
     if is_any_browser:
@@ -139,6 +135,36 @@ def get_playlist(request: Request):
 
 @app.get("/r/{index:int}")
 async def handle_indexed_request(request: Request, index: int, tv: str = None):
+    ua = (request.headers.get("user-agent") or "").lower()
+    client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
+
+    # Перехват для Telegram-бота (чтобы рисовалась красивая карточка)
+    if "telegrambot" in ua:
+        host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
+        protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
+        base_url = f"{protocol}://{host_url}"
+        preview_html = f"""<!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta property="og:title" content="📡 𝕏aльвa (Канал #{index + 1}) 📡">
+            <meta property="og:description" content="Прямая трансляция канала 👆">
+            <meta property="og:image" content="{MAINTENANCE_VIDEO}">
+            <meta property="og:url" content="{base_url}/r/{index}?tv={SECRET_KEY}">
+            <title>IPTV Stream</title>
+        </head>
+        <body>Redirecting...</body>
+        </html>"""
+        return Response(content=preview_html, media_type="text/html; charset=utf-8")
+
+    # ЖЕСТКИЙ БЛОК БРАУЗЕРОВ И ДЛЯ ПРЯМЫХ ССЫЛОК НА КАНАЛЫ (отправляем в Telegram)
+    browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
+    is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
+    is_any_browser = any(b in ua for b in browser_keywords) and not is_player
+
+    if is_any_browser or client_ip in BANNED_IPS or client_ip.startswith(BANNED_PREFIXES):
+        return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
+
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
