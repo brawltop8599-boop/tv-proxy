@@ -14,22 +14,6 @@ PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=10.0)
 
-# === ФУНКЦИИ ШИФРОВАНИЯ (чтобы нельзя было расшифровать Base64) ===
-def encrypt_url(url: str) -> str:
-    key = SECRET_KEY.encode()
-    data = url.encode()
-    xored = bytearray(b ^ key[i % len(key)] for i, b in enumerate(data))
-    return base64.urlsafe_b64encode(xored).decode('utf-8').rstrip("=")
-
-def decrypt_url(token: str) -> str:
-    padding = 4 - (len(token) % 4)
-    if padding < 4:
-        token += "=" * padding
-    decoded_bytes = base64.urlsafe_b64decode(token.encode('utf-8'))
-    key = SECRET_KEY.encode()
-    orig = bytearray(b ^ key[i % len(key)] for i, b in enumerate(decoded_bytes))
-    return orig.decode('utf-8')
-
 # === ЧЁРНЫЙ СПИСОК IP И ПОДСЕТЕЙ ===
 BANNED_IPS = {
     "5.253.66.62", "23.106.249.56", "23.106.253.18", "31.3.156.64", "38.180.180.126", "46.150.71.146", "91.214.82.125", "109.86.19.135", "217.12.223.190", "188.233.60.20",
@@ -182,60 +166,5 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
 
     target_url = streams[index]
 
-    host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
-    protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
-    base_url = f"{protocol}://{host_url}"
-
-    if ".m3u8" in target_url.lower() or "mpegurl" in target_url.lower():
-        try:
-            client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
-            r = await http_client.get(target_url, headers={"User-Agent": client_ua})
-            
-            if r.status_code == 200:
-                playlist_text = r.text
-                lines = playlist_text.splitlines()
-                rewritten_lines = []
-
-                for line in lines:
-                    line_str = line.strip()
-                    if line_str and not line_str.startswith("#"):
-                        if not line_str.startswith("http"):
-                            base_path = target_url.rsplit("/", 1)[0]
-                            absolute_sub_url = f"{base_path}/{line_str}"
-                        else:
-                            absolute_sub_url = line_str
-
-                        # ИСПОЛЬЗУЕМ НАСТОЯЩЕЕ ШИФРОВАНИЕ ВМЕСТО BASE64
-                        encrypted_sub = encrypt_url(absolute_sub_url)
-                        rewritten_lines.append(f"{base_url}/sub/{encrypted_sub}?tv={SECRET_KEY}")
-                    else:
-                        rewritten_lines.append(line)
-
-                return PlainTextResponse("\n".join(rewritten_lines), status_code=200, media_type="application/vnd.apple.mpegurl")
-        except Exception:
-            pass
-
-    return RedirectResponse(url=target_url, status_code=302)
-
-@app.get("/sub/{token}")
-async def handle_sub_request(request: Request, token: str, tv: str = None):
-    ua = (request.headers.get("user-agent") or "").lower()
-    client_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for") or ""
-
-    # БЛОКИРУЕМ БРАУЗЕРЫ И НА /sub/ (ПЕРЕНАПРАВЛЯЕМ В ТЕЛЕГРАМ)
-    browser_keywords = ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident", "ucbrowser", "samsungbrowser", "brave", "vivaldi"]
-    is_player = any(p in ua for p in ["vlc", "televizor", "televizo", "tivimate", "kodi", "iptv", "netplayer", "ott", "libvlc"])
-    is_any_browser = any(b in ua for b in browser_keywords) and not is_player
-
-    if is_any_browser or client_ip in BANNED_IPS or client_ip.startswith(BANNED_PREFIXES):
-        return RedirectResponse(url=TELEGRAM_GROUP, status_code=302)
-
-    if tv != SECRET_KEY:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    try:
-        target_url = decrypt_url(token)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid token")
-
+    # Сразу перенаправляем плеер на поток провайдера без скачивания и парсинга .m3u8
     return RedirectResponse(url=target_url, status_code=302)
