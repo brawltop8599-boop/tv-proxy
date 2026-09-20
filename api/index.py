@@ -7,12 +7,13 @@ from fastapi.responses import PlainTextResponse, StreamingResponse, RedirectResp
 
 app = FastAPI()
 
+# === НАСТРОЙКИ И ССЫЛКИ ===
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
 TELEGRAM_GROUP = "https://t.me/+2lWVU6CKQsVkMWRi"
 MAINTENANCE_VIDEO = "https://github.com/brawltop8599-boop/ads-stub/raw/refs/heads/main/v.mp4"
 
-# Черный список IP (из вашего скрипта)
+# === ЧЁРНЫЙ СПИСОК IP И ПОДСЕТЕЙ ===
 BANNED_IPS = {
     "5.253.66.62", "23.106.249.56", "23.106.253.18", "31.3.156.64", "38.180.180.126", "46.150.71.146", "91.214.82.125", "109.86.19.135", "217.12.223.190", "188.233.60.20",
     "91.195.172.249", "149.102.240.138", "91.194.168.20", "91.195.172.241", "91.195.172.240", "88.218.92.126", "46.150.71.235", "194.44.26.199", "130.0.235.254",
@@ -20,10 +21,13 @@ BANNED_IPS = {
     "176.108.27.175", "91.123.158.251", "46.172.86.196", "213.5.196.234", "217.196.164.251", "195.64.183.237", "37.214.2.184", "176.105.213.173", "176.105.213.129",
     "91.194.168.40", "159.194.214.13", "217.107.106.106", "91.195.172.250", "78.111.155.199", "95.83.134.76", "178.120.4.234", "46.53.134.27", "178.150.186.100",
     "46.150.94.187", "45.12.26.251", "80.91.179.217", "85.198.107.131", "176.119.83.194", "46.150.90.146", "85.249.245.196", "176.105.213.137",
-    "109.172.30.88", "178.137.26.58", "143.244.45.242", "194.44.57.68", "143.244.46.242", "188.239.94.135", "82.208.115.42"
+    "109.172.30.88", "178.137.26.58", "143.244.45.242", "194.44.57.68", "143.244.46.242", "188.239.94.135", "82.208.115.42",
+    "2001:678:6d4:5060::3ead:110", "2003:cc:bf4d:1c1a:77e0:492e:451d:a4", "2003:cc:bf48:c26d:143:5df7:12bc:7686", "2a00:1e98:f2d5:e661:455c:a694:bcaf:17ad",
+    "2a0a:4cc0:c1:ea4e:784f:20ff:fe46:d1b1", "2a00:1fa0:c604:e33a:5b7e:e2c6:b58b:5360", "2a00:20:8008:8766:78e8:c27a:537:9d47", "2a00:1fa0:82a8:5b8d:cc51:cf16:701b:71e",
+    "2001:9e8:3c3a:d100:96a6:62ce:7b7f:3e06", "2a00:1e98:f022:9877:c1ba:4b65:5e85:1c4f", "2a0d:6fc2:5db2:6600:b0b1:70c1:6721:ca58", "2a00:1e98:f2d5:e661:5a0f:182a:60ea:e4cd",
+    "2a02:6ea0:3100:2000:490a:2928:d5eb:e685"
 }
 
-# Подсети для блокировки
 BANNED_PREFIXES = (
     "2a09:bac5:", "2a02:3032:", "2a09:bac1:", "2a12:bec4:", "2a01:e5c0:", "2a02:2378:", "2a02:4780:", "2001:49f0:", 
     "2a14:a087:", "2a01:4f8:", "2001:ac8:", "2a03:d000:", "2001:16b8:", "2a0e:d604:", "2a06:98c0:", "2a01:4f9:", 
@@ -93,16 +97,16 @@ def get_playlist(request: Request, tv: str = None):
         </html>"""
         return HTMLResponse(content=preview_html)
 
-    # 3. Блокировка ПК и обычных браузеров -> отправка в Telegram
-    is_desktop_or_browser = any(b in ua for b in ["windows", "macintosh", "chrome", "safari", "firefox", "edg", "opera", "msie", "trident"]) or ("linux" in ua and "android" not in ua)
-    if is_desktop_or_browser:
+    # 3. Блокируем обычные браузерные заходы, но оставляем доступ для плееров (VLC, Televiso и т.д.)
+    is_web_browser = any(b in ua for b in ["chrome", "safari", "firefox", "edg", "opera", "msie", "trident"]) and not any(p in ua for p in ["vlc", "libvlc", "potplayer", "mpv", "android"])
+    if is_web_browser and not tv:
         return RedirectResponse(TELEGRAM_GROUP, status_code=302)
 
-    # 4. Если ключ неверный — отдаем фейковый плейлист вместо ошибки
+    # 4. Если ключ неверный — отдаем фейковый плейлист
     if tv != SECRET_KEY:
         return PlainTextResponse(get_fake_playlist(), media_type="application/x-mpegurl")
 
-    # 5. Если всё ок — отдаем реальный плейлист с индексами
+    # 5. Если всё ок — отдаем реальный плейлист с замаскированными индексами
     lines = PLAYLIST_TEXT.splitlines()
     new_lines = []
     stream_index = 0
