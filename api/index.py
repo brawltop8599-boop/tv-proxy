@@ -1,4 +1,5 @@
 import base64
+import httpx
 import os
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
@@ -7,6 +8,8 @@ app = FastAPI()
 
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
+
+http_client = httpx.AsyncClient(follow_redirects=True, timeout=10.0)
 
 def encode_url(url: str) -> str:
     return base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8').rstrip("=")
@@ -34,7 +37,6 @@ def get_playlist(request: Request):
         if not line:
             continue
         
-        # Заворачиваем каждую ссылку в зашифрованный Base64 токен
         if not line.startswith("#"):
             encoded_token = encode_url(line)
             new_lines.append(f"{base_url}/r/{encoded_token}?tv={SECRET_KEY}")
@@ -48,6 +50,43 @@ async def handle_request(request: Request, token: str, tv: str = None):
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Расшифровываем токен и мгновенно перенаправляем плеер на реальный источник
     target_url = decode_url(token)
+
+    host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
+    protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
+    base_url = f"{protocol}://{host_url}"
+
+    # Если запрашивают плейлист (.m3u8), мгновенно переписываем его текст, пряча ссылки внутрь Base64
+    if ".m3u8" in target_url.lower() or "mpegurl" in target_url.lower():
+        try:
+            client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
+            r = await http_client.get(target_url, headers={"User-Agent": client_ua})
+            
+            if r.status_code == 200:
+                playlist_text = r.text
+                lines = playlist_text.splitlines()
+                rewritten_lines = []
+
+                for line in lines:
+                    line_str = line.strip()
+                    if line_str and not line_str.startswith("#"):
+                        if not line_str.startswith("http"):
+                            base_path = target_url.rsplit("/", 1)[0]
+                            absolute_sub_url = f"{base_path}/{line_str}"
+                        else:
+                            absolute_sub_url = line_str
+
+                        sub_token = encode_url(absolute_sub_url)
+                        rewritten_lines.append(f"{base_url}/r/{sub_token}?tv={SECRET_KEY}")
+                    else:
+                        rewritten_lines.append(line)
+
+                return PlainTextResponse("\n".join(rewritten_lines), status_code=200, media_type="application/vnd.apple.mpegurl")
+        except Exception:
+            pass
+        
+        # Если при скачивании плейлиста произошел сбой, мягко перенаправляем на оригинал
+        return RedirectResponse(url=target_url, status_code=302)
+
+    # Для тяжелых видео-чанк потоков делаем прямой быстрый редирект без задержек и вылетов
     return RedirectResponse(url=target_url, status_code=302)
