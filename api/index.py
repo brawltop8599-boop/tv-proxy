@@ -10,6 +10,7 @@ app = FastAPI()
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
 SECRET_KEY = "tvzatak"
 
+# Создаем глобальный HTTP-клиент для переиспользования соединений
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
 
 def encode_url(url: str) -> str:
@@ -84,7 +85,10 @@ async def handle_request(request: Request, token: str, tv: str = None):
         base_url = f"{protocol}://{host_url}"
 
         try:
-            req = http_client.build_request("GET", target_url, headers={"User-Agent": "Mozilla/5.0"})
+            # Берем User-Agent от плеера (например, Televiso или VLC), чтобы провайдер не банил (ошибка 403)
+            client_ua = request.headers.get("user-agent", "Mozilla/5.0")
+            
+            req = http_client.build_request("GET", target_url, headers={"User-Agent": client_ua})
             r = await http_client.send(req, stream=True)
 
             content_type = r.headers.get("content-type", "")
