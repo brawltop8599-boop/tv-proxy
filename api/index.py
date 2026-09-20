@@ -12,7 +12,6 @@ SECRET_KEY = "tvzatak"
 http_client = httpx.AsyncClient(follow_redirects=True, timeout=10.0)
 
 def get_streams_list():
-    """Возвращает чистый список всех оригинальных ссылок из плейлиста"""
     lines = PLAYLIST_TEXT.splitlines()
     streams = []
     for line in lines:
@@ -36,7 +35,6 @@ def get_playlist(request: Request):
         if not line:
             continue
         
-        # Вместо огромной Base64 строки подставляем короткий номер: /r/0, /r/1, /r/2...
         if not line.startswith("#"):
             new_lines.append(f"{base_url}/r/{stream_index}?tv={SECRET_KEY}")
             stream_index += 1
@@ -47,7 +45,6 @@ def get_playlist(request: Request):
 
 @app.get("/r/{index:int}")
 async def handle_indexed_request(request: Request, index: int, tv: str = None):
-    """Принимает короткий номер (индекс), находит ссылку и отдает плейлист или редирект"""
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -61,7 +58,7 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
     protocol = "https" if "vercel.app" in host_url or "https" in request.url.scheme else "http"
     base_url = f"{protocol}://{host_url}"
 
-    # Если это m3u8 плейлист, быстренько скачиваем и тоже заменяем его внутренности на короткие индексы
+    # Если это m3u8, скачиваем текст и отдаем его плееров текстом, а не редиректом
     if ".m3u8" in target_url.lower() or "mpegurl" in target_url.lower():
         try:
             client_ua = request.headers.get("user-agent", "VLC/3.0.18 LibVLC/3.0.18")
@@ -71,15 +68,19 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
                 playlist_text = r.text
                 lines = playlist_text.splitlines()
                 rewritten_lines = []
-                sub_index = 0
 
                 for line in lines:
                     line_str = line.strip()
                     if line_str and not line_str.startswith("#"):
-                        # Внутренние ссылки тоже можно пронумеровать или зашифровать
-                        encoded_sub = base64.urlsafe_b64encode(line_str.encode('utf-8')).decode('utf-8').rstrip("=")
+                        if not line_str.startswith("http"):
+                            base_path = target_url.rsplit("/", 1)[0]
+                            absolute_sub_url = f"{base_path}/{line_str}"
+                        else:
+                            absolute_sub_url = line_str
+
+                        # Прячем вложенные ссылки в Base64 токен, который обработает безопасный роут
+                        encoded_sub = base64.urlsafe_b64encode(absolute_sub_url.encode('utf-8')).decode('utf-8').rstrip("=")
                         rewritten_lines.append(f"{base_url}/sub/{encoded_sub}?tv={SECRET_KEY}")
-                        sub_index += 1
                     else:
                         rewritten_lines.append(line)
 
@@ -87,12 +88,12 @@ async def handle_indexed_request(request: Request, index: int, tv: str = None):
         except Exception:
             pass
 
-    # Для видео-потоков делаем быстрый редирект без вылетов
+    # Для финальных видео-чанк потоков — мгновенный редирект на источник
     return RedirectResponse(url=target_url, status_code=302)
 
 @app.get("/sub/{token}")
 async def handle_sub_request(request: Request, token: str, tv: str = None):
-    """Обработка вложенных под-ссылок из плейлистов"""
+    """Мгновенный редирект для видео-чанк файлов из вложенных плейлистов"""
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
     
