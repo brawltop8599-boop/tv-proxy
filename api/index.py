@@ -59,43 +59,40 @@ def get_playlist(request: Request):
 
     return "\n".join(new_lines)
 
-@app.get("/r/{index}")
-def redirect_to_base64(index: int, tv: str = None):
+@app.get("/r/{token}")
+async def handle_request(token: str, tv: str = None):
     """
-    Шаг 1: При открытии короткого индекса сервер делает редирект (302) 
-    на ту самую Base64-кашу (/r/aHR0cHM...), чтобы её было видно при вскрытии!
-    """
-    if tv != SECRET_KEY:
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    tokens = get_encoded_streams()
-    if not (0 <= index < len(tokens)):
-        raise HTTPException(status_code=404, detail="Stream not found")
-    
-    encoded_token = tokens[index]
-    
-    # Перенаправляем на роут с Base64-кашей
-    return RedirectResponse(url=f"/r/{encoded_token}?tv={SECRET_KEY}", status_code=302)
-
-@app.get("/r/{encoded_token:path}")
-async def proxy_base64_stream(encoded_token: str, tv: str = None):
-    """
-    Шаг 2: Принимает Base64-кашу, расшифровывает и проксирует реальный поток
+    Универсальный обработчик:
+    1. Если передан цифровой индекс (например, /r/0) — редиректит на Base64-кашу.
+    2. Если передана сама Base64-каша (например, /r/aHR0c...) — расшифровывает и проксирует поток.
     """
     if tv != SECRET_KEY:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    target_url = decode_url(encoded_token)
+    # Проверяем, число ли это (индекс из плейлиста)
+    if token.isdigit():
+        index = int(token)
+        tokens = get_encoded_streams()
+        if not (0 <= index < len(tokens)):
+            raise HTTPException(status_code=404, detail="Stream not found")
+        
+        encoded_token = tokens[index]
+        # Делаем редирект на ту самую Base64-кашу, чтобы её было видно при вскрытии
+        return RedirectResponse(url=f"/r/{encoded_token}?tv={SECRET_KEY}", status_code=302)
+    
+    else:
+        # Если прилетела Base64-каша — расшифровываем и проксируем реальный поток
+        target_url = decode_url(token)
 
-    client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
-    try:
-        req = client.build_request("GET", target_url, headers={"User-Agent": "Mozilla/5.0"})
-        r = await client.send(req, stream=True)
+        client = httpx.AsyncClient(follow_redirects=True, timeout=30.0)
+        try:
+            req = client.build_request("GET", target_url, headers={"User-Agent": "Mozilla/5.0"})
+            r = await client.send(req, stream=True)
 
-        return StreamingResponse(
-            r.aiter_bytes(),
-            status_code=r.status_code,
-            media_type=r.headers.get("content-type", "video/mp2t")
-        )
-    except Exception:
-        raise HTTPException(status_code=502, detail="Failed to fetch upstream stream")
+            return StreamingResponse(
+                r.aiter_bytes(),
+                status_code=r.status_code,
+                media_type=r.headers.get("content-type", "video/mp2t")
+            )
+        except Exception:
+            raise HTTPException(status_code=502, detail="Failed to fetch upstream stream")
