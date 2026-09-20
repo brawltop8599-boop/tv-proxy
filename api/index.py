@@ -7,7 +7,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 app = FastAPI()
 
 # === НАСТРОЙКИ И ССЫЛКИ ===
-SECRET_KEY = "tvza"
+SECRET_KEY = "v10"
 TELEGRAM_GROUP = "https://t.me/+2lWVU6CKQsVkMWRi"
 MAINTENANCE_VIDEO = "https://github.com/brawltop8599-boop/ads-stub/raw/refs/heads/main/v.mp4"
 PLAYLIST_TEXT = os.environ.get("PLAYLIST_DATA", "#EXTM3U")
