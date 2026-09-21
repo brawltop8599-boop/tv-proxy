@@ -64,7 +64,9 @@ def get_fake_playlist_response():
         media_type="application/x-mpegurl; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="playlist_protected.m3u"'}
     )
-
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
 @app.get("/")
 def get_playlist(request: Request):
     host_url = request.headers.get("host") or os.environ.get("VERCEL_URL", "localhost:8000")
